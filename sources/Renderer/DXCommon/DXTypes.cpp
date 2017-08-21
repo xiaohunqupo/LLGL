@@ -70,8 +70,8 @@ DXGI_FORMAT Map(const TextureFormat textureFormat)
     switch (textureFormat)
     {
         /* --- Base internal formats --- */
-        case TextureFormat::DepthComponent: return DXGI_FORMAT_D32_FLOAT;
-        case TextureFormat::DepthStencil:   return DXGI_FORMAT_D24_UNORM_S8_UINT;
+        case TextureFormat::DepthComponent: return DXGI_FORMAT_R32_TYPELESS;//DXGI_FORMAT_D32_FLOAT;
+        case TextureFormat::DepthStencil:   return DXGI_FORMAT_R24G8_TYPELESS;//DXGI_FORMAT_D24_UNORM_S8_UINT;
         case TextureFormat::R:              return DXGI_FORMAT_R8_UNORM;
         case TextureFormat::RG:             return DXGI_FORMAT_R8G8_UNORM;
         case TextureFormat::RGB:            break;

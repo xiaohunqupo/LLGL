@@ -340,20 +340,40 @@ void D3D11RenderSystem::BuildGenericTexture2D(
 {
     /* Setup D3D texture descriptor and create D3D texture resouce */
     D3D11_TEXTURE2D_DESC texDesc;
+    
+    texDesc.Width               = descD3D.texture2D.width;
+    texDesc.Height              = descD3D.texture2D.height;
+    texDesc.MipLevels           = 0;
+    texDesc.ArraySize           = descD3D.texture2D.layers;
+    texDesc.Format              = D3D11Types::Map(descD3D.format);
+    texDesc.SampleDesc.Count    = 1;
+    texDesc.SampleDesc.Quality  = 0;
+    texDesc.Usage               = D3D11_USAGE_DEFAULT;
+    texDesc.CPUAccessFlags      = 0;
+
+    #if 0
+    if (IsDepthStencilFormat(descD3D.format))
     {
-        texDesc.Width               = descD3D.texture2D.width;
-        texDesc.Height              = descD3D.texture2D.height;
-        texDesc.MipLevels           = 0;
-        texDesc.ArraySize           = descD3D.texture2D.layers;
-        texDesc.Format              = D3D11Types::Map(descD3D.format);
-        texDesc.SampleDesc.Count    = 1;
-        texDesc.SampleDesc.Quality  = 0;
-        texDesc.Usage               = D3D11_USAGE_DEFAULT;
-        texDesc.BindFlags           = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-        texDesc.CPUAccessFlags      = 0;
-        texDesc.MiscFlags           = miscFlags;
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_DEPTH_STENCIL;
+        texDesc.MiscFlags = 0;
+
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc;
+        {
+            srvDesc.Format                      = DXGI_FORMAT_R32_FLOAT;
+            srvDesc.ViewDimension               = D3D11_SRV_DIMENSION_TEXTURE2D;
+            srvDesc.Texture2D.MostDetailedMip   = 0;
+            srvDesc.Texture2D.MipLevels         = 1;
+        }
+        textureD3D.CreateTexture2D(device_.Get(), texDesc, nullptr, &srvDesc);
     }
-    textureD3D.CreateTexture2D(device_.Get(), texDesc);
+    else
+    #endif
+    {
+        texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        texDesc.MiscFlags = miscFlags;
+
+        textureD3D.CreateTexture2D(device_.Get(), texDesc);
+    }
 
     if (imageDesc)
     {
