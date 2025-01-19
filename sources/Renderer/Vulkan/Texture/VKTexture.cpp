@@ -6,10 +6,12 @@
  */
 
 #include "VKTexture.h"
-#include "../VKDevice.h"
+#include "VKImageUtils.h"
 #include "../Memory/VKDeviceMemory.h"
+#include "../Command/VKCommandContext.h"
 #include "../../TextureUtils.h"
 #include "../../../Core/CoreUtils.h"
+#include <LLGL/Backend/Vulkan/NativeHandle.h>
 #include "../VKTypes.h"
 #include "../VKCore.h"
 #include <algorithm>
@@ -42,6 +44,24 @@ VKTexture::VKTexture(
     /* Create Vulkan image and allocate memory region */
     CreateImage(device, desc);
     image_.AllocateMemoryRegion(deviceMemoryMngr);
+}
+
+bool VKTexture::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    if (auto* nativeHandleVK = GetTypedNativeHandle<Vulkan::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
+    {
+        nativeHandleVK->type                    = Vulkan::ResourceNativeType::Image;
+        nativeHandleVK->image.image             = GetVkImage();
+        nativeHandleVK->image.imageLayout       = GetVkImageLayout();
+        nativeHandleVK->image.format            = GetVkFormat();
+        nativeHandleVK->image.extent            = GetVkExtent();
+        nativeHandleVK->image.numMipLevels      = GetNumMipLevels();
+        nativeHandleVK->image.numArrayLayers    = GetNumArrayLayers();
+        nativeHandleVK->image.sampleCountBits   = GetSampleCountBits();
+        nativeHandleVK->image.imageUsageFlags   = GetUsageFlags();
+        return true;
+    }
+    return false;
 }
 
 Extent3D VKTexture::GetMipExtent(std::uint32_t mipLevel) const
@@ -187,9 +207,10 @@ void VKTexture::CreateImageView(
     Format                      format,
     VKPtr<VkImageView>&         outImageView)
 {
+    const VkFormat viewVkFormat = VKTypes::Map(format);
     VkImageSubresourceRange subresourceRange;
     {
-        subresourceRange.aspectMask     = GetAspectFlags();
+        subresourceRange.aspectMask     = VKImageUtils::GetExclusiveVkImageAspect(viewVkFormat); //TODO: allow stencil-component to be selected
         subresourceRange.baseMipLevel   = subresource.baseMipLevel;
         subresourceRange.levelCount     = subresource.numMipLevels;
         subresourceRange.baseArrayLayer = subresource.baseArrayLayer;
@@ -200,7 +221,7 @@ void VKTexture::CreateImageView(
     image_.CreateVkImageView(
         device,
         VKTypes::Map(GetType()),
-        VKTypes::Map(format),
+        viewVkFormat,
         subresourceRange,
         outImageView,
         &components
@@ -212,9 +233,10 @@ void VKTexture::CreateImageView(
     const TextureViewDescriptor&    textureViewDesc,
     VKPtr<VkImageView>&             outImageView)
 {
+    const VkFormat viewVkFormat = VKTypes::Map(textureViewDesc.format);
     VkImageSubresourceRange subresourceRange;
     {
-        subresourceRange.aspectMask     = GetAspectFlags();
+        subresourceRange.aspectMask     = VKImageUtils::GetExclusiveVkImageAspect(viewVkFormat); //TODO: allow stencil-component to be selected
         subresourceRange.baseMipLevel   = textureViewDesc.subresource.baseMipLevel,
         subresourceRange.levelCount     = textureViewDesc.subresource.numMipLevels;
         subresourceRange.baseArrayLayer = textureViewDesc.subresource.baseArrayLayer;
@@ -225,72 +247,77 @@ void VKTexture::CreateImageView(
     image_.CreateVkImageView(
         device,
         VKTypes::Map(textureViewDesc.type),
-        VKTypes::Map(textureViewDesc.format),
+        viewVkFormat,
         subresourceRange,
         outImageView,
         &components
     );
 }
 
+static bool UsageFlagsAllowImageViews(VkImageUsageFlags flags)
+{
+    /* Vulkan only alows image views on images that were created with these usage flags */
+    constexpr VkImageUsageFlags requiredFlags =
+    (
+        VK_IMAGE_USAGE_SAMPLED_BIT                              |
+        VK_IMAGE_USAGE_STORAGE_BIT                              |
+        VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT                     |
+        VK_IMAGE_USAGE_DEPTH_STENCIL_ATTACHMENT_BIT             |
+        VK_IMAGE_USAGE_TRANSIENT_ATTACHMENT_BIT                 |
+        VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT                     |
+      //VK_IMAGE_USAGE_FRAGMENT_SHADING_RATE_ATTACHMENT_BIT_KHR |
+      //VK_IMAGE_USAGE_FRAGMENT_DENSITY_MAP_BIT_EXT             |
+      //VK_IMAGE_USAGE_VIDEO_DECODE_DST_BIT_KHR                 |
+      //VK_IMAGE_USAGE_VIDEO_DECODE_DPB_BIT_KHR                 |
+      //VK_IMAGE_USAGE_VIDEO_ENCODE_SRC_BIT_KHR                 |
+      //VK_IMAGE_USAGE_VIDEO_ENCODE_DPB_BIT_KHR                 |
+      //VK_IMAGE_USAGE_SAMPLE_WEIGHT_BIT_QCOM                   |
+      //VK_IMAGE_USAGE_SAMPLE_BLOCK_MATCH_BIT_QCOM              |
+        0
+    );
+    return ((flags & requiredFlags) != 0);
+}
+
 void VKTexture::CreateInternalImageView(VkDevice device)
 {
-    VkImageSubresourceRange subresourceRange;
+    if (UsageFlagsAllowImageViews(GetUsageFlags()))
     {
-        subresourceRange.aspectMask     = GetAspectFlags();
-        subresourceRange.baseMipLevel   = 0;
-        subresourceRange.levelCount     = GetNumMipLevels();
-        subresourceRange.baseArrayLayer = 0;
-        subresourceRange.layerCount     = GetNumArrayLayers();
+        VkImageSubresourceRange subresourceRange;
+        {
+            subresourceRange.aspectMask     = VKImageUtils::GetExclusiveVkImageAspect(format_); //TODO: allow stencil-component to be selected
+            subresourceRange.baseMipLevel   = 0;
+            subresourceRange.levelCount     = GetNumMipLevels();
+            subresourceRange.baseArrayLayer = 0;
+            subresourceRange.layerCount     = GetNumArrayLayers();
+        }
+        VkComponentMapping components = {};
+        ConvertVkComponentMapping(components, TextureSwizzleRGBA{}, swizzleFormat_);
+        image_.CreateVkImageView(device, VKTypes::Map(GetType()), format_, subresourceRange, imageView_, &components);
     }
-    VkComponentMapping components = {};
-    ConvertVkComponentMapping(components, TextureSwizzleRGBA{}, swizzleFormat_);
-    image_.CreateVkImageView(device, VKTypes::Map(GetType()), format_, subresourceRange, imageView_, &components);
 }
 
 VkImageLayout VKTexture::TransitionImageLayout(
-    VKDevice&       device,
-    VkCommandBuffer commandBuffer,
-    VkImageLayout   newLayout)
-{
-    return TransitionImageLayout(
-        device,
-        commandBuffer,
-        newLayout,
-        TextureSubresource{ 0, numArrayLayers_, 0, numMipLevels_ }
-    );
-}
-
-VkImageLayout VKTexture::TransitionImageLayout(
-    VKDevice&                   device,
-    VkCommandBuffer             commandBuffer,
+    VKCommandContext&           context,
     VkImageLayout               newLayout,
-    const TextureSubresource&   subresource)
+    bool                        flushBarrier)
 {
-    return image_.TransitionImageLayout(device, commandBuffer, GetVkFormat(), newLayout, subresource);
+    const TextureSubresource fullSubresource{ 0, numArrayLayers_, 0, numMipLevels_ };
+    VkImageLayout oldLayout = image_.TransitionImageLayout(context, GetVkFormat(), newLayout, fullSubresource);
+    if (flushBarrier)
+        context.FlushBarriers();
+    return oldLayout;
 }
 
-static VkImageAspectFlags GetAspectFlagsByFormat(VkFormat format)
+VkImageLayout VKTexture::TransitionImageLayout(
+    VKCommandContext&           context,
+    VkImageLayout               newLayout,
+    const TextureSubresource&   subresource,
+    bool                        flushBarrier)
 {
-    switch (format)
-    {
-        case VK_FORMAT_D16_UNORM:
-        case VK_FORMAT_X8_D24_UNORM_PACK32:
-        case VK_FORMAT_D32_SFLOAT:
-            return VK_IMAGE_ASPECT_DEPTH_BIT;
-        case VK_FORMAT_S8_UINT:
-            return VK_IMAGE_ASPECT_STENCIL_BIT;
-        case VK_FORMAT_D16_UNORM_S8_UINT:
-        case VK_FORMAT_D24_UNORM_S8_UINT:
-        case VK_FORMAT_D32_SFLOAT_S8_UINT:
-            return VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
-        default:
-            return VK_IMAGE_ASPECT_COLOR_BIT;
-    }
-}
-
-VkImageAspectFlags VKTexture::GetAspectFlags() const
-{
-    return GetAspectFlagsByFormat(format_);
+    VkImageLayout oldLayout = image_.TransitionImageLayout(context, GetVkFormat(), newLayout, subresource);
+    if (flushBarrier)
+        context.FlushBarriers();
+    return oldLayout;
 }
 
 
@@ -404,8 +431,8 @@ static VkImageUsageFlags GetVkImageUsageFlags(const TextureDescriptor& desc)
 {
     VkImageUsageFlags usageFlags = VK_IMAGE_USAGE_TRANSFER_DST_BIT;
 
-    /* Enable TRANSFER_SRC_BIT image usage when MIP-maps are enabled */
-    if (IsMipMappedTexture(desc) || (desc.bindFlags & BindFlags::CopySrc) != 0)
+    /* Enable TRANSFER_SRC_BIT image usage when MIP-maps are enabled, CPU read access or copy source binding is requested */
+    if (IsMipMappedTexture(desc) || (desc.cpuAccessFlags & CPUAccessFlags::Read) || (desc.bindFlags & BindFlags::CopySrc) != 0)
         usageFlags |= VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
     /* Enable either color or depth-stencil ATTACHMENT_BIT image usage when attachment usage is enabled */
@@ -443,6 +470,7 @@ void VKTexture::CreateImage(VkDevice device, const TextureDescriptor& desc)
     numMipLevels_       = NumMipLevels(desc);
     numArrayLayers_     = GetVkImageArrayLayers(desc, imageType);
     sampleCountBits_    = GetVkImageSampleCountFlags(desc);
+    usageFlags_         = GetVkImageUsageFlags(desc);
 
     /* Create image object */
     image_.CreateVkImage(
@@ -454,7 +482,7 @@ void VKTexture::CreateImage(VkDevice device, const TextureDescriptor& desc)
         numArrayLayers_,
         GetVkImageCreateFlags(desc),
         sampleCountBits_,
-        GetVkImageUsageFlags(desc)
+        usageFlags_
     );
 }
 

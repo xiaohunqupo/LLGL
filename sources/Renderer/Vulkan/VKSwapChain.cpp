@@ -8,8 +8,9 @@
 #include "VKSwapChain.h"
 #include "VKCore.h"
 #include "VKTypes.h"
-#include "VKDevice.h"
+#include "Command/VKCommandContext.h"
 #include "Memory/VKDeviceMemoryManager.h"
+#include "Texture/VKImageUtils.h"
 #include "../TextureUtils.h"
 #include "../../Core/CoreUtils.h"
 #include "../../Core/Exception.h"
@@ -25,12 +26,7 @@ namespace LLGL
 
 /* ----- Common ----- */
 
-const std::uint32_t VKSwapChain::maxNumColorBuffers;
-
-static const std::vector<const char*> g_deviceExtensions
-{
-    VK_KHR_SWAPCHAIN_EXTENSION_NAME
-};
+constexpr std::uint32_t VKSwapChain::maxNumFramesInFlight;
 
 static VKPtr<VkImageView> NullVkImageView(VkDevice device)
 {
@@ -47,13 +43,19 @@ static VKPtr<VkSemaphore> NullVkSemaphore(VkDevice device)
     return VKPtr<VkSemaphore>{ device, vkDestroySemaphore };
 }
 
+static VKPtr<VkFence> NullVkFence(VkDevice device)
+{
+    return VKPtr<VkFence>{ device, vkDestroyFence };
+}
+
 VKSwapChain::VKSwapChain(
     VkInstance                      instance,
     VkPhysicalDevice                physicalDevice,
     VkDevice                        device,
     VKDeviceMemoryManager&          deviceMemoryMngr,
     const SwapChainDescriptor&      desc,
-    const std::shared_ptr<Surface>& surface)
+    const std::shared_ptr<Surface>& surface,
+    const RendererInfo&             rendererInfo)
 :
     SwapChain                { desc                            },
     instance_                { instance                        },
@@ -64,48 +66,48 @@ VKSwapChain::VKSwapChain(
     swapChain_               { device, vkDestroySwapchainKHR   },
     swapChainRenderPass_     { device                          },
     swapChainSamples_        { GetClampedSamples(desc.samples) },
-    swapChainImageViews_     { NullVkImageView(device_),
-                               NullVkImageView(device_),
-                               NullVkImageView(device_)        },
-    swapChainFramebuffers_   { NullVkFramebuffer(device_),
-                               NullVkFramebuffer(device_),
-                               NullVkFramebuffer(device_)      },
     secondaryRenderPass_     { device                          },
     depthStencilBuffer_      { device                          },
-    colorBuffers_            { device, device, device          },
     imageAvailableSemaphore_ { NullVkSemaphore(device_),
                                NullVkSemaphore(device_),
                                NullVkSemaphore(device_)        },
     renderFinishedSemaphore_ { NullVkSemaphore(device_),
                                NullVkSemaphore(device_),
-                               NullVkSemaphore(device_)        }
+                               NullVkSemaphore(device_)        },
+    inFlightFences_          { NullVkFence(device_),
+                               NullVkFence(device_),
+                               NullVkFence(device_)            }
 {
-    SetOrCreateSurface(surface, desc.resolution, desc.fullscreen, nullptr);
+    SetOrCreateSurface(surface, SwapChain::BuildDefaultSurfaceTitle(rendererInfo), desc.resolution, desc.fullscreen);
 
-    CreatePresentSemaphores();
+    CreatePresentSemaphoresAndFences();
     CreateGpuSurface();
 
     /* Pick image count for swap-chain and depth-stencil format */
-    numColorBuffers_    = PickSwapChainSize(desc.swapBuffers);
-    depthStencilFormat_ = PickDepthStencilFormat(desc.depthBits, desc.stencilBits);
+    numPreferredColorBuffers_   = PickSwapChainSize(desc.swapBuffers);
+    depthStencilFormat_         = PickDepthStencilFormat(desc.depthBits, desc.stencilBits);
 
-    /* Create Vulkan swap-chain and render pass */
-    CreateSwapChainRenderPass();
-    CreateSecondaryRenderPass();
+    /* Create Vulkan render passes, swap-chain, depth-stencil buffer, and multisampling color buffers */
+    CreateDefaultAndSecondaryRenderPass();
+    CreateResolutionDependentResources(GetResolution());
 
-    /* Create Vulkan swap-chain, depth-stencil buffer, and multisampling color buffers */
-    CreateResolutionDependentResources(desc.resolution);
+    /* Show default surface */
+    if (!surface)
+        ShowSurface();
+}
+
+bool VKSwapChain::IsPresentable() const
+{
+    /* Use implicit boolean conversion here, since this type can either be a pointer or an integer type depending on the platform */
+    return !!surface_.Get();
 }
 
 void VKSwapChain::Present()
 {
-    /* Get image index for next presentation */
-    const std::uint32_t presentableImageIndex = GetPresentableImageIndex();
-
     /* Initialize semaphores */
-    VkSemaphore waitSemaphorse[] = { imageAvailableSemaphore_[currentColorBuffer_] };
+    VkSemaphore waitSemaphores[] = { imageAvailableSemaphore_[currentFrameInFlight_] };
     VkPipelineStageFlags waitStages[] = { VK_PIPELINE_STAGE_COLOR_ATTACHMENT_OUTPUT_BIT };
-    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore_[currentColorBuffer_] };
+    VkSemaphore signalSemaphores[] = { renderFinishedSemaphore_[currentFrameInFlight_] };
 
     /* Submit signal semaphore to graphics queue */
     VkSubmitInfo submitInfo;
@@ -113,19 +115,17 @@ void VKSwapChain::Present()
         submitInfo.sType                = VK_STRUCTURE_TYPE_SUBMIT_INFO;
         submitInfo.pNext                = nullptr;
         submitInfo.waitSemaphoreCount   = 1;
-        submitInfo.pWaitSemaphores      = waitSemaphorse;
+        submitInfo.pWaitSemaphores      = waitSemaphores;
         submitInfo.pWaitDstStageMask    = waitStages;
         submitInfo.commandBufferCount   = 0;
         submitInfo.pCommandBuffers      = nullptr;
         submitInfo.signalSemaphoreCount = 1;
         submitInfo.pSignalSemaphores    = signalSemaphores;
     }
-    VkResult result = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, VK_NULL_HANDLE);
+    VkResult result = vkQueueSubmit(graphicsQueue_, 1, &submitInfo, inFlightFences_[currentFrameInFlight_]);
     VKThrowIfFailed(result, "failed to submit semaphore to Vulkan graphics queue");
 
     /* Present result on screen */
-    VkSwapchainKHR swapChains[] = { swapChain_ };
-
     VkPresentInfoKHR presentInfo;
     {
         presentInfo.sType               = VK_STRUCTURE_TYPE_PRESENT_INFO_KHR;
@@ -133,15 +133,15 @@ void VKSwapChain::Present()
         presentInfo.waitSemaphoreCount  = 1;
         presentInfo.pWaitSemaphores     = signalSemaphores;
         presentInfo.swapchainCount      = 1;
-        presentInfo.pSwapchains         = swapChains;
-        presentInfo.pImageIndices       = &presentableImageIndex;
+        presentInfo.pSwapchains         = swapChain_.GetAddressOf();
+        presentInfo.pImageIndices       = &currentColorBuffer_;
         presentInfo.pResults            = nullptr;
     }
     result = vkQueuePresentKHR(presentQueue_, &presentInfo);
     VKThrowIfFailed(result, "failed to present Vulkan graphics queue");
 
     /* Move to next frame */
-    currentColorBuffer_ = (presentableImageIndex + 1) % numColorBuffers_;
+    AcquireNextColorBuffer();
 }
 
 std::uint32_t VKSwapChain::GetCurrentSwapIndex() const
@@ -179,6 +179,7 @@ bool VKSwapChain::SetVsyncInterval(std::uint32_t vsyncInterval)
     /* Recreate swap-chain with new vsnyc settings */
     if (vsyncInterval_ != vsyncInterval)
     {
+        CreatePresentSemaphoresAndFences();
         CreateSwapChain(GetResolution(), vsyncInterval);
         CreateSwapChainFramebuffers();
         vsyncInterval_ = vsyncInterval;
@@ -229,8 +230,7 @@ void CopyVkImageRegion(TDst& outRegion, const TextureRegion& dstRegion, const Of
 }
 
 void VKSwapChain::CopyImage(
-    VKDevice&               device,
-    VkCommandBuffer         commandBuffer,
+    VKCommandContext&       context,
     VkImage                 dstImage,
     VkImageLayout           dstImageLayout,
     const TextureRegion&    dstRegion,
@@ -239,7 +239,7 @@ void VKSwapChain::CopyImage(
     VkFormat                format)
 {
     const bool                  isDepthStencil  = VKTypes::IsVkFormatDepthStencil(format);
-    const VkImageAspectFlags    aspectFlags     = (isDepthStencil ? VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT : VK_IMAGE_ASPECT_COLOR_BIT);
+    const VkImageAspectFlags    aspectFlags     = VKImageUtils::GetInclusiveVkImageAspect(format);
 
     if (HasMultiSampling())
     {
@@ -252,12 +252,13 @@ void VKSwapChain::CopyImage(
                 return /*No depth-stencil buffer*/;
 
             VkImage srcImage = depthStencilBuffer_.GetVkImage();
-            device.ResolveImage(commandBuffer, srcImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, resolveRegion, format);
+            context.ResolveImage(srcImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, resolveRegion, format);
         }
         else
         {
+            LLGL_ASSERT(srcColorBuffer < colorBuffers_.size());
             VkImage srcImage = colorBuffers_[srcColorBuffer].GetVkImage();
-            device.ResolveImage(commandBuffer, srcImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, resolveRegion, format);
+            context.ResolveImage(srcImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, resolveRegion, format);
         }
     }
     else
@@ -271,12 +272,13 @@ void VKSwapChain::CopyImage(
                 return /*No depth-stencil buffer*/;
 
             VkImage srcImage = depthStencilBuffer_.GetVkImage();
-            device.CopyImage(commandBuffer, srcImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, copyRegion, format);
+            context.CopyImage(srcImage, VK_IMAGE_LAYOUT_DEPTH_STENCIL_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, copyRegion, format);
         }
         else
         {
+            LLGL_ASSERT(srcColorBuffer < swapChainImages_.size());
             VkImage srcImage = swapChainImages_[srcColorBuffer];
-            device.CopyImage(commandBuffer, srcImage, VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL, dstImage, dstImageLayout, copyRegion, format);
+            context.CopyImage(srcImage, VK_IMAGE_LAYOUT_PRESENT_SRC_KHR, dstImage, dstImageLayout, copyRegion, format);
         }
     }
 }
@@ -296,7 +298,7 @@ bool VKSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
         vkQueueWaitIdle(graphicsQueue_);
 
         /* Recreate presenting semaphores and Vulkan surface */
-        CreatePresentSemaphores();
+        CreatePresentSemaphoresAndFences();
         CreateGpuSurface();
 
         /* Recreate color and depth-stencil buffers */
@@ -319,13 +321,26 @@ void VKSwapChain::CreateGpuSemaphore(VKPtr<VkSemaphore>& semaphore)
     VKThrowIfFailed(result, "failed to create Vulkan semaphore");
 }
 
-void VKSwapChain::CreatePresentSemaphores()
+void VKSwapChain::CreateGpuFence(VKPtr<VkFence>& fence)
+{
+    VkFenceCreateInfo createInfo;
+    {
+        createInfo.sType = VK_STRUCTURE_TYPE_FENCE_CREATE_INFO;
+        createInfo.pNext = nullptr;
+        createInfo.flags = VK_FENCE_CREATE_SIGNALED_BIT;
+    }
+    VkResult result = vkCreateFence(device_, &createInfo, nullptr, fence.ReleaseAndGetAddressOf());
+    VKThrowIfFailed(result, "failed to create Vulkan fence");
+}
+
+void VKSwapChain::CreatePresentSemaphoresAndFences()
 {
     /* Create presentation semaphorse */
-    for_range(i, numColorBuffers_)
+    for_range(i, maxNumFramesInFlight)
     {
         CreateGpuSemaphore(imageAvailableSemaphore_[i]);
         CreateGpuSemaphore(renderFinishedSemaphore_[i]);
+        CreateGpuFence(inFlightFences_[i]);
     }
 }
 
@@ -365,6 +380,23 @@ void VKSwapChain::CreateGpuSurface()
     VkResult result = vkCreateXlibSurfaceKHR(instance_, &createInfo, nullptr, surface_.ReleaseAndGetAddressOf());
     VKThrowIfFailed(result, "failed to create Xlib surface for Vulkan swap-chain");
 
+    #elif defined LLGL_OS_ANDROID
+
+    LLGL_ASSERT(nativeHandle.window != nullptr, "missing valid ANativeWindow object to create Vulkan surface on Android");
+    VkAndroidSurfaceCreateInfoKHR createInfo;
+    {
+        createInfo.sType    = VK_STRUCTURE_TYPE_ANDROID_SURFACE_CREATE_INFO_KHR;
+        createInfo.pNext    = nullptr;
+        createInfo.flags    = 0;
+        createInfo.window   = nativeHandle.window;
+    }
+    VkResult result = vkCreateAndroidSurfaceKHR(instance_, &createInfo, nullptr, surface_.ReleaseAndGetAddressOf());
+    VKThrowIfFailed(result, "failed to create Android surface for Vulkan swap-chain");
+
+    #else
+
+    #error Platform not supported for Vulkan backend
+
     #endif
 
     /* Query surface support details and pick surface format */
@@ -372,16 +404,12 @@ void VKSwapChain::CreateGpuSurface()
     swapChainFormat_        = PickSwapSurfaceFormat(surfaceSupportDetails_.formats);
 }
 
-void VKSwapChain::CreateRenderPass(VKRenderPass& renderPass, bool isSecondary)
+void VKSwapChain::CreateRenderPass(VKRenderPass& renderPass, AttachmentLoadOp loadOp, AttachmentStoreOp storeOp)
 {
     RenderPassDescriptor renderPassDesc;
     {
         /* Pass number of samples to render pass descriptor */
         renderPassDesc.samples = swapChainSamples_;
-
-        /* Determine load and store operations for primary and secondary render passes */
-        const AttachmentLoadOp  loadOp  = (isSecondary ? AttachmentLoadOp::Load : AttachmentLoadOp::Undefined);
-        const AttachmentStoreOp storeOp = AttachmentStoreOp::Store;
 
         /* Specify single color attachment */
         renderPassDesc.colorAttachments[0] = AttachmentFormatDescriptor{ GetColorFormat(), loadOp, storeOp };
@@ -397,14 +425,10 @@ void VKSwapChain::CreateRenderPass(VKRenderPass& renderPass, bool isSecondary)
     renderPass.CreateVkRenderPass(device_, renderPassDesc);
 }
 
-void VKSwapChain::CreateSecondaryRenderPass()
+void VKSwapChain::CreateDefaultAndSecondaryRenderPass()
 {
-    CreateRenderPass(secondaryRenderPass_, true);
-}
-
-void VKSwapChain::CreateSwapChainRenderPass()
-{
-    CreateRenderPass(swapChainRenderPass_, false);
+    CreateRenderPass(swapChainRenderPass_, AttachmentLoadOp::Undefined, AttachmentStoreOp::Store);
+    CreateRenderPass(secondaryRenderPass_, AttachmentLoadOp::Load, AttachmentStoreOp::Store);
 }
 
 void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyncInterval)
@@ -414,7 +438,7 @@ void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyn
 
     /* Get device queues for graphics and presentation */
     VkSurfaceKHR surface = surface_.Get();
-    const QueueFamilyIndices queueFamilyIndices = VKFindQueueFamilies(physicalDevice_, VK_QUEUE_GRAPHICS_BIT, &surface);
+    const VKQueueFamilyIndices queueFamilyIndices = VKFindQueueFamilies(physicalDevice_, VK_QUEUE_GRAPHICS_BIT, &surface);
 
     vkGetDeviceQueue(device_, queueFamilyIndices.graphicsFamily, 0, &graphicsQueue_);
     vkGetDeviceQueue(device_, queueFamilyIndices.presentFamily, 0, &presentQueue_);
@@ -429,12 +453,13 @@ void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyn
         createInfo.pNext                        = nullptr;
         createInfo.flags                        = 0;
         createInfo.surface                      = surface_;
-        createInfo.minImageCount                = numColorBuffers_;
+        createInfo.minImageCount                = numPreferredColorBuffers_;
         createInfo.imageFormat                  = swapChainFormat_.format;
         createInfo.imageColorSpace              = swapChainFormat_.colorSpace;
         createInfo.imageExtent                  = swapChainExtent_;
         createInfo.imageArrayLayers             = 1;
-        createInfo.imageUsage                   = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT;// | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
+        //TODO: allow more fine grain control; VK_IMAGE_USAGE_TRANSFER_SRC_BIT is required for CopyTextureFromFramebuffer()
+        createInfo.imageUsage                   = VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT | VK_IMAGE_USAGE_TRANSFER_SRC_BIT;
 
         if (queueFamilyIndices.graphicsFamily != queueFamilyIndices.presentFamily)
         {
@@ -449,7 +474,12 @@ void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyn
             createInfo.pQueueFamilyIndices      = nullptr;
         }
 
-        createInfo.preTransform                 = surfaceSupportDetails_.caps.currentTransform;
+        /* Prefer identity transformation */
+        if ((surfaceSupportDetails_.caps.supportedTransforms & VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR) != 0)
+            createInfo.preTransform             = VK_SURFACE_TRANSFORM_IDENTITY_BIT_KHR;
+        else
+            createInfo.preTransform             = surfaceSupportDetails_.caps.currentTransform;
+
         createInfo.compositeAlpha               = VK_COMPOSITE_ALPHA_OPAQUE_BIT_KHR;
         createInfo.presentMode                  = presentMode;
         createInfo.clipped                      = VK_TRUE;
@@ -459,17 +489,19 @@ void VKSwapChain::CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyn
     VKThrowIfFailed(result, "failed to create Vulkan swap-chain");
 
     /* Query swap-chain images */
+    numColorBuffers_ = numPreferredColorBuffers_;
     result = vkGetSwapchainImagesKHR(device_, swapChain_, &numColorBuffers_, nullptr);
     VKThrowIfFailed(result, "failed to query number of Vulkan swap-chain images");
 
-    result = vkGetSwapchainImagesKHR(device_, swapChain_, &numColorBuffers_, swapChainImages_);
+    swapChainImages_.resize(numColorBuffers_, VK_NULL_HANDLE);
+    result = vkGetSwapchainImagesKHR(device_, swapChain_, &numColorBuffers_, swapChainImages_.data());
     VKThrowIfFailed(result, "failed to query Vulkan swap-chain images");
 
     /* Create swap-chain image views */
     CreateSwapChainImageViews();
 
     /* Get initial color buffer index for new Vulkan swap-chain */
-    currentColorBuffer_ = GetPresentableImageIndex();
+    AcquireNextColorBuffer();
 }
 
 void VKSwapChain::CreateSwapChainImageViews()
@@ -495,14 +527,17 @@ void VKSwapChain::CreateSwapChainImageViews()
     }
 
     /* Create all image views for the swap-chain */
+    swapChainImageViews_.resize(numColorBuffers_);
     for_range(i, numColorBuffers_)
     {
         /* Update image handle in Vulkan descriptor */
         createInfo.image = swapChainImages_[i];
 
         /* Create image view for framebuffer */
-        VkResult result = vkCreateImageView(device_, &createInfo, nullptr, swapChainImageViews_[i].ReleaseAndGetAddressOf());
+        VKPtr<VkImageView> imageView{ NullVkImageView(device_) };
+        VkResult result = vkCreateImageView(device_, &createInfo, nullptr, imageView.ReleaseAndGetAddressOf());
         VKThrowIfFailed(result, "failed to create Vulkan swap-chain image view");
+        swapChainImageViews_[i] = std::move(imageView);
     }
 }
 
@@ -537,11 +572,15 @@ void VKSwapChain::CreateSwapChainFramebuffers()
     }
 
     /* Create all framebuffers for the swap-chain */
+    swapChainFramebuffers_.resize(numColorBuffers_);
     for_range(i, numColorBuffers_)
     {
+        LLGL_ASSERT(swapChainImageViews_[i].Get() != VK_NULL_HANDLE, "failed to create Vulkan framebuffer for swap-buffer [%u]", i);
+
         /* Update image view in Vulkan descriptor */
         if (HasMultiSampling())
         {
+            LLGL_ASSERT(colorBuffers_[i].GetVkImageView() != VK_NULL_HANDLE, "failed to create Vulkan framebuffer for swap-buffer [%u]", i);
             attachments[attachmentColor] = colorBuffers_[i].GetVkImageView();
             attachments[attachmentResolve] = swapChainImageViews_[i];
         }
@@ -549,23 +588,30 @@ void VKSwapChain::CreateSwapChainFramebuffers()
             attachments[attachmentColor] = swapChainImageViews_[i];
 
         /* Create framebuffer */
-        VkResult result = vkCreateFramebuffer(device_, &createInfo, nullptr, swapChainFramebuffers_[i].ReleaseAndGetAddressOf());
+        VKPtr<VkFramebuffer> framebuffer{ NullVkFramebuffer(device_) };
+        VkResult result = vkCreateFramebuffer(device_, &createInfo, nullptr, framebuffer.ReleaseAndGetAddressOf());
         VKThrowIfFailed(result, "failed to create Vulkan swap-chain framebuffer");
+        swapChainFramebuffers_[i] = std::move(framebuffer);
     }
 }
 
 void VKSwapChain::CreateDepthStencilBuffer(const Extent2D& resolution)
 {
-    const auto sampleCountBits = VKTypes::ToVkSampleCountBits(swapChainSamples_);
+    const VkSampleCountFlagBits sampleCountBits = VKTypes::ToVkSampleCountBits(swapChainSamples_);
     depthStencilBuffer_.Create(deviceMemoryMngr_, resolution, depthStencilFormat_, sampleCountBits);
 }
 
 void VKSwapChain::CreateColorBuffers(const Extent2D& resolution)
 {
     /* Create VkImage objects for each swap-chain buffer */
-    const auto sampleCountBits = VKTypes::ToVkSampleCountBits(swapChainSamples_);
+    const VkSampleCountFlagBits sampleCountBits = VKTypes::ToVkSampleCountBits(swapChainSamples_);
+    colorBuffers_.resize(numColorBuffers_);
     for_range(i, numColorBuffers_)
-        colorBuffers_[i].Create(deviceMemoryMngr_, resolution, swapChainFormat_.format, sampleCountBits);
+    {
+        VKColorBuffer colorBuffer{ device_ };
+        colorBuffer.Create(deviceMemoryMngr_, resolution, swapChainFormat_.format, sampleCountBits);
+        colorBuffers_[i] = std::move(colorBuffer);
+    }
 }
 
 void VKSwapChain::ReleaseRenderBuffers()
@@ -648,7 +694,7 @@ static std::vector<VkFormat> GetDepthStencilFormatPreference(int depthBits, int 
 
 VkFormat VKSwapChain::PickDepthStencilFormat(int depthBits, int stencilBits) const
 {
-    const auto formats = GetDepthStencilFormatPreference(depthBits, stencilBits);
+    const std::vector<VkFormat> formats = GetDepthStencilFormatPreference(depthBits, stencilBits);
     return VKFindSupportedImageFormat(
         physicalDevice_,
         formats.data(),
@@ -662,23 +708,32 @@ std::uint32_t VKSwapChain::PickSwapChainSize(std::uint32_t swapBuffers) const
 {
     return Clamp(
         swapBuffers,
-        std::max(surfaceSupportDetails_.caps.minImageCount, 1u),
-        std::min(surfaceSupportDetails_.caps.maxImageCount, VKSwapChain::maxNumColorBuffers)
+        surfaceSupportDetails_.caps.minImageCount,
+        surfaceSupportDetails_.caps.maxImageCount
     );
 }
 
-std::uint32_t VKSwapChain::GetPresentableImageIndex() const
+void VKSwapChain::AcquireNextColorBuffer()
 {
-    std::uint32_t presentableImageIndex = 0;
+    currentFrameInFlight_ = (currentFrameInFlight_ + 1) % maxNumFramesInFlight;
+    vkWaitForFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf(), VK_TRUE, UINT64_MAX);
+
     vkAcquireNextImageKHR(
         device_,
         swapChain_,
         UINT64_MAX,
-        imageAvailableSemaphore_[currentColorBuffer_],
+        imageAvailableSemaphore_[currentFrameInFlight_],
         VK_NULL_HANDLE,
-        &presentableImageIndex
+        &currentColorBuffer_
     );
-    return presentableImageIndex;
+
+    LLGL_ASSERT(
+        currentColorBuffer_ < numColorBuffers_,
+        "next swap-chain image index (%u) exceeds upper bound (%u)",
+        currentColorBuffer_, numColorBuffers_
+    );
+
+    vkResetFences(device_, 1, inFlightFences_[currentFrameInFlight_].GetAddressOf());
 }
 
 

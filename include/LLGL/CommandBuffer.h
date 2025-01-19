@@ -39,14 +39,12 @@ class SwapChain;
 
 \remarks This is the main interface to encode graphics, compute, and blit commands to be submitted to the GPU.
 All states that can be changed with a setter function are not persistent across several encoding sections.
-Before any command can be encoded, the command buffer must be set into encode mode, which is done by the CommandBuffer::Begin function.
+Before any command can be encoded, the command buffer must be put into recording mode via the CommandBuffer::Begin function.
+And before the command buffer can be submitted to the command queue, it must be put out of recording mode via the CommandBuffer::End function.
 
-\remarks In a multi-threaded environment, all blit commands (e.g. CommandBuffer::UpdateBuffer, CommandBuffer::CopyBuffer etc.) <b>must not</b> be called simultaneously
-with the same source and/or destination resources even if their ranges do not collide.
-Depending on the backend, those resources might be transitioned into difference states during those commands.
-The same applies to CommandBuffer::BeginRenderPass where the specified RenderTarget might be transitioned into rendering state.
-Binding resources (CommandBuffer::SetResource, CommandBuffer::SetResourceHeap) as well as vertex (CommandBuffer::SetVertexBuffer) and
-index streams (CommandBuffer::SetIndexBuffer) can be performed in a multi-threaded fashion with either the same or separate resources.
+\remarks In a multi-threaded environment, buffer and texture resources <b>must not</b> be encoded in more than one command buffer at a time.
+They can be used in more than one command buffer, but they cannot be encoded in parallel.
+That is because some backends might modify internal data of the resources to quickly organize them in caches.
 
 \see RenderSystem::CreateCommandBuffer
 */
@@ -77,14 +75,16 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         virtual void End() = 0;
 
         /**
-        \brief Executes the specified deferred command buffer.
-        \param[in] deferredCommandBuffer Specifies the deferred command buffer which is meant to be executed.
-        This command buffer must have been created with the CommandBufferFlags::Secondary flag.
-        \remarks This function can only be used by primary command buffers, i.e. command buffers that have not been created with the flag CommandBufferFlags::Secondary.
+        \brief Executes the specified secondary command buffer by inlining its commands into this command buffer.
+        \param[in] secondaryCommandBuffer Specifies the secondary command buffer which is meant to be inlined.
+        This command buffer must have been created with the CommandBufferFlags::Secondary flag and its must also have finished encoding.
+        \remarks This function can only be used by primary command buffers, i.e. command buffers that have \e not been created with the flag CommandBufferFlags::Secondary.
+        \remarks Once this command buffer is submitted for execution to one or more primary command buffers,
+        it <b>must not</b> be updated unless all of such primary command buffers are also updated before their next submission to the command queue.
         \see CommandBufferFlags
         \todo Incomplete for: D3D12, Vulkan, Metal.
         */
-        virtual void Execute(CommandBuffer& deferredCommandBuffer) = 0;
+        virtual void Execute(CommandBuffer& secondaryCommandBuffer) = 0;
 
         /* ----- Blitting ----- */
 
@@ -301,6 +301,8 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \param[in] srcOffset Specifies the source offset at which the framebuffer is to be read from.
         If the source offset plus the destination dimension is larger the framebuffer's resolution, the behavior is undefined.
 
+        \remarks This command must only be used inside a render pass.
+
         \remarks For performance reasons, it is recommended to render a scene into a RenderTarget instead of copying the framebuffer into a texture.
         This command merely simplifies the process of capturing the framebuffer mid-scene without having to interrupt a render pass or creating an intermediate render target.
 
@@ -456,37 +458,15 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         */
         virtual void SetResource(std::uint32_t descriptor, Resource& resource) = 0;
 
-        /**
-        \brief Resets the binding slots for the specified resources.
-
-        \param[in] resourceType Specifies the type of resources to unbind.
-
-        \param[in] firstSlot Specifies the first binding slot beginning with zero.
-        This must be zero for the following resource types: ResourceType::IndexBuffer, ResourceType::StreamOutputBuffer.
-
-        \param[in] numSlots Specifies the number of binding slots to reset. If this is zero, the function has no effect.
-
-        \param[in] bindFlags Specifies which kind of binding slots to reset.
-        This can be a bitwise OR combinations of the BindFlags entries.
-        To reset a vertex buffer slot for instance, it must contain the BindFlags::VertexBuffer flag.
-
-        \param[in] stageFlags Specifies which shader stages are affected.
-        This can be a bitwise OR combination of the StageFlags entries. By default StageFlags::AllStages.
-
-        \remarks This should be called when a resource is currently bound as shader output and will be bound as shader input for the next draw or compute commands.
-        \remarks If direct resource binding is not supported by the render system, this function has no effect.
-
-        \note Only supported with: OpenGL, Direct3D 11, Metal.
-        \see BindFlags
-        \see StageFlags
-        */
+        //! \deprecated Since 0.04b; No need to reset resource slots manually anymore!
+        LLGL_DEPRECATED("CommandBuffer::ResetResourceSlots is deprecated since 0.04b; No need to reset resource slots manually anymore!")
         virtual void ResetResourceSlots(
             const ResourceType  resourceType,
             std::uint32_t       firstSlot,
             std::uint32_t       numSlots,
             long                bindFlags,
             long                stageFlags      = StageFlags::AllStages
-        ) = 0;
+        );
 
         /* ----- Render Passes ----- */
 
@@ -592,7 +572,7 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         To clear only a specific render-target color buffer, use the \c ClearAttachments function.
         Clearing a depth-stencil attachment while the active render target has no depth-stencil buffer is allowed but has no effect.
         For efficiency reasons, it is recommended to clear the render target attachments when a new render pass begins,
-        i.e. the clear values of the \c BeginRenderPass function should be prefered over this function.
+        i.e. the clear values of the \c BeginRenderPass function should be preferred over this function.
         For some render systems (e.g. Metal) this function forces the current render pass to stop and start again in order to clear the attachments.
 
         \see ClearFlags
@@ -611,7 +591,7 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \remarks To clear all color buffers with the same value, use the \c Clear function.
         Clearing a depth-stencil attachment while the active render target has no depth-stencil buffer is allowed but has no effect.
         For efficiency reasons, it is recommended to clear the render target attachments when a new render pass begins,
-        i.e. the clear values of the \c BeginRenderPass function should be prefered over this function.
+        i.e. the clear values of the \c BeginRenderPass function should be preferred over this function.
         For some render systems (e.g. Metal) this function forces the current render pass to stop and start again in order to clear the attachments.
 
         \see Clear
@@ -805,7 +785,10 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         */
         virtual void DrawIndexed(std::uint32_t numIndices, std::uint32_t firstIndex, std::int32_t vertexOffset) = 0;
 
-        //! \see DrawInstanced(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t)
+        /**
+        \see DrawInstanced(std::uint32_t, std::uint32_t, std::uint32_t, std::uint32_t)
+        \todo \c numInstances should be the second parameter to be consistent with DrawIndexedInstanced() function and with D3D API. This will inevitably be a breaking change.
+        */
         virtual void DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances) = 0;
 
         /**
@@ -825,6 +808,8 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
 
         \see RenderingFeatures::hasInstancing
         \see RenderingFeatures::hasOffsetInstancing
+
+        \todo \c numInstances should be the second parameter to be consistent with DrawIndexedInstanced() function and with D3D API. This will inevitably be a breaking change.
         */
         virtual void DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances, std::uint32_t firstInstance) = 0;
 
@@ -871,8 +856,8 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \param[in] buffer Specifies the buffer from which the draw command arguments are taken. This buffer must have been created with the BindFlags::IndirectBuffer binding flag.
         \param[in] offset Specifies an offset within the argument buffer from which the arguments are to be taken. This offset must be a multiple of 4.
         \param[in] numCommands Specifies the number of draw commands that are to be taken from the argument buffer.
-        \param[in] stride Specifies the stride (in bytes) betweeen consecutive sets of arguments,
-        which is commonly greater than or euqal to <code>sizeof(DrawIndirectArguments)</code>. This stride must be a multiple of 4.
+        \param[in] stride Specifies the stride (in bytes) between consecutive sets of arguments,
+        which is commonly greater than or equal to <code>sizeof(DrawIndirectArguments)</code>. This stride must be a multiple of 4.
 
         \remarks This is also known as a "multi draw command" which is only natively supported by OpenGL and Vulkan.
         For other rendering APIs, the recording of multiple draw commands is emulated with a simple loop, which is equivalent to the following example:
@@ -903,8 +888,8 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \param[in] buffer Specifies the buffer from which the draw command arguments are taken. This buffer must have been created with the BindFlags::IndirectBuffer binding flag.
         \param[in] offset Specifies an offset within the argument buffer from which the arguments are to be taken. This offset must be a multiple of 4.
         \param[in] numCommands Specifies the number of draw commands that are to be taken from the argument buffer.
-        \param[in] stride Specifies the stride (in bytes) betweeen consecutive sets of arguments,
-        which is commonly greater than or euqal to <code>sizeof(DrawIndexedIndirectArguments)</code>. This stride must be a multiple of 4.
+        \param[in] stride Specifies the stride (in bytes) between consecutive sets of arguments,
+        which is commonly greater than or equal to <code>sizeof(DrawIndexedIndirectArguments)</code>. This stride must be a multiple of 4.
 
         \remarks This is also known as a "multi draw command" which is only natively supported by OpenGL and Vulkan.
         For other rendering APIs, the recording of multiple draw commands is emulated with a simple loop, which is equivalent to the following example:
@@ -919,6 +904,18 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \see DrawIndexedIndirectArguments
         */
         virtual void DrawIndexedIndirect(Buffer& buffer, std::uint64_t offset, std::uint32_t numCommands, std::uint32_t stride) = 0;
+
+        /**
+        \brief Performs an automatic draw command whose number of primitives is provided by a stream-output buffer that is bound to the input assembler stage.
+
+        \remarks This command only supports a single vertex buffer in the input assembler stage
+        and it must have been created with the BindFlags::VertexBuffer and BindFlags::StreamOutputBuffer binding flags.
+
+        \remarks This can be used to pre-transform vertices and render the output later one or multiple times.
+
+        \see RenderingFeatures::hasStreamOutputs
+        */
+        virtual void DrawStreamOutput() = 0;
 
         /* ----- Compute ----- */
 
@@ -979,7 +976,7 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \brief Performs a native command that is backend specific.
 
         \param[out] nativeCommand Raw pointer to the backend specific structure to store the native command.
-        Optain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeCommand.h></code>
+        Obtain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeCommand.h></code>
         where \c BACKEND must be either \c Direct3D12, \c Direct3D11, \c Vulkan, \c Metal, or \c OpenGL.
 
         \param[in] nativeCommandSize Specifies the size (in bytes) of the native command structure for robustness.
@@ -1007,7 +1004,7 @@ class LLGL_EXPORT CommandBuffer : public RenderSystemChild
         \brief Returns the native command buffer handle.
 
         \param[out] nativeHandle Raw pointer to the backend specific structure to store the native handle.
-        Optain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeHandle.h></code>
+        Obtain the respective structure from <code>#include <LLGL/Backend/BACKEND/NativeHandle.h></code>
         where \c BACKEND must be either \c Direct3D12, \c Direct3D11, \c Vulkan, or \c Metal.
         OpenGL does not have a native handle as it uses the current platform specific GL context.
 

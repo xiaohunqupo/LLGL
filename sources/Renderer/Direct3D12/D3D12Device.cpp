@@ -7,6 +7,7 @@
 
 #include "D3D12Device.h"
 #include "../DXCommon/DXCore.h"
+#include "../../Core/MacroUtils.h"
 #include <LLGL/Utils/ForRange.h>
 
 
@@ -16,7 +17,7 @@ namespace LLGL
 
 /* ----- Device creation ----- */
 
-HRESULT D3D12Device::CreateDXDevice(const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, IDXGIAdapter* adapter)
+HRESULT D3D12Device::CreateDXDevice(const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, bool isDebugLayerEnabled, IDXGIAdapter* adapter)
 {
     HRESULT hr = S_OK;
 
@@ -29,16 +30,62 @@ HRESULT D3D12Device::CreateDXDevice(const ArrayView<D3D_FEATURE_LEVEL>& featureL
             /* Store selected feature level */
             featureLevel_ = level;
 
-            #ifdef LLGL_DEBUG
-            if (SUCCEEDED(device_.As(&infoQueue_)))
-                DenyLowSeverityWarnings();
-            #endif
+            if (isDebugLayerEnabled)
+            {
+                if (SUCCEEDED(device_.As(&infoQueue_)))
+                    DenyLowSeverityWarnings();
+            }
 
             break;
         }
     }
 
     return hr;
+}
+
+HRESULT D3D12Device::ShareDXDevice(ID3D12Device* sharedD3DDevice)
+{
+    if (sharedD3DDevice == nullptr)
+        return E_INVALIDARG;
+
+    /* Query maximum support feature level */
+    const D3D_FEATURE_LEVEL featureLevels[]
+    {
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 2
+        D3D_FEATURE_LEVEL_12_2,
+        #endif
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        D3D_FEATURE_LEVEL_12_1,
+        #endif
+        D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_9_3,
+        D3D_FEATURE_LEVEL_9_2,
+        D3D_FEATURE_LEVEL_9_1,
+    };
+    D3D12_FEATURE_DATA_FEATURE_LEVELS featureLevelSupport;
+    {
+        featureLevelSupport.NumFeatureLevels            = LLGL_ARRAY_LENGTH(featureLevels);
+        featureLevelSupport.pFeatureLevelsRequested     = featureLevels;
+        featureLevelSupport.MaxSupportedFeatureLevel    = D3D_FEATURE_LEVEL_9_1;
+    }
+    HRESULT hr = sharedD3DDevice->CheckFeatureSupport(D3D12_FEATURE_FEATURE_LEVELS, &featureLevelSupport, sizeof(featureLevelSupport));
+    if (FAILED(hr))
+        return hr;
+
+    featureLevel_ = featureLevelSupport.MaxSupportedFeatureLevel;
+
+    /* Store refernece to shared D3D device */
+    device_ = sharedD3DDevice;
+
+    /* Query info queue if debugging is enabled */
+    if (SUCCEEDED(device_.As(&infoQueue_)))
+        DenyLowSeverityWarnings();
+
+    return S_OK;
 }
 
 ComPtr<ID3D12CommandQueue> D3D12Device::CreateDXCommandQueue(D3D12_COMMAND_LIST_TYPE type)
@@ -74,26 +121,6 @@ ComPtr<ID3D12GraphicsCommandList> D3D12Device::CreateDXCommandList(D3D12_COMMAND
     DXThrowIfCreateFailed(hr, "ID3D12GraphicsCommandList");
 
     return commandList;
-}
-
-ComPtr<ID3D12PipelineState> D3D12Device::CreateDXGraphicsPipelineState(const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc)
-{
-    ComPtr<ID3D12PipelineState> pipelineState;
-
-    HRESULT hr = device_->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(pipelineState.ReleaseAndGetAddressOf()));
-    DXThrowIfCreateFailed(hr, "ID3D12PipelineState");
-
-    return pipelineState;
-}
-
-ComPtr<ID3D12PipelineState> D3D12Device::CreateDXComputePipelineState(const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc)
-{
-    ComPtr<ID3D12PipelineState> pipelineState;
-
-    HRESULT hr = device_->CreateComputePipelineState(&desc, IID_PPV_ARGS(pipelineState.ReleaseAndGetAddressOf()));
-    DXThrowIfCreateFailed(hr, "ID3D12PipelineState");
-
-    return pipelineState;
 }
 
 ComPtr<ID3D12QueryHeap> D3D12Device::CreateDXQueryHeap(const D3D12_QUERY_HEAP_DESC& desc)
@@ -146,8 +173,6 @@ DXGI_SAMPLE_DESC D3D12Device::FindSuitableSampleDesc(std::size_t numFormats, con
  * ======= Private: =======
  */
 
-#ifdef LLGL_DEBUG
-
 void D3D12Device::DenyLowSeverityWarnings()
 {
     /*
@@ -163,6 +188,9 @@ void D3D12Device::DenyLowSeverityWarnings()
     {
         D3D12_MESSAGE_ID_CLEARRENDERTARGETVIEW_MISMATCHINGCLEARVALUE,
         D3D12_MESSAGE_ID_CLEARDEPTHSTENCILVIEW_MISMATCHINGCLEARVALUE,
+        D3D12_MESSAGE_ID_RESOURCE_BARRIER_DUPLICATE_SUBRESOURCE_TRANSITIONS, // Ignore this efficiency warning for now. This must be optimized in D3D12CommandContext.
+        //D3D12_MESSAGE_ID_GPU_BASED_VALIDATION_INCOMPATIBLE_RESOURCE_STATE, //TODO: workaround
+        //D3D12_MESSAGE_ID_RESOURCE_BARRIER_BEFORE_AFTER_MISMATCH, //TODO: workaround
     };
 
     D3D12_INFO_QUEUE_FILTER filter = {};
@@ -174,8 +202,6 @@ void D3D12Device::DenyLowSeverityWarnings()
     }
     infoQueue_->PushStorageFilter(&filter);
 }
-
-#endif // /LLGL_DEBUG
 
 
 } // /namespace LLGL

@@ -11,6 +11,7 @@
 
 #include <LLGL/Window.h>
 #include <LLGL/SwapChain.h>
+#include <LLGL/RenderPassFlags.h>
 #include "VKCore.h"
 #include "VKPtr.h"
 #include "RenderState/VKRenderPass.h"
@@ -24,12 +25,16 @@ namespace LLGL
 {
 
 
-class VKDevice;
+class VKCommandContext;
 class VKDeviceMemoryManager;
 class VKDeviceMemoryRegion;
 
 class VKSwapChain final : public SwapChain
 {
+
+    public:
+
+        #include <LLGL/Backend/SwapChain.inl>
 
     public:
 
@@ -39,23 +44,9 @@ class VKSwapChain final : public SwapChain
             VkDevice                        device,
             VKDeviceMemoryManager&          deviceMemoryMngr,
             const SwapChainDescriptor&      desc,
-            const std::shared_ptr<Surface>& surface
+            const std::shared_ptr<Surface>& surface,
+            const RendererInfo&             rendererInfo
         );
-
-        void Present() override;
-
-        std::uint32_t GetCurrentSwapIndex() const override;
-        std::uint32_t GetNumSwapBuffers() const override;
-        std::uint32_t GetSamples() const override;
-
-        Format GetColorFormat() const override;
-        Format GetDepthStencilFormat() const override;
-
-        const RenderPass* GetRenderPass() const override;
-
-        bool SetVsyncInterval(std::uint32_t vsyncInterval) override;
-
-    public:
 
         // Returns the swap-chain render pass object.
         inline const VKRenderPass& GetSwapChainRenderPass() const
@@ -92,8 +83,7 @@ class VKSwapChain final : public SwapChain
 
         // Copies the specified backbuffer into the destination image.
         void CopyImage(
-            VKDevice&               device,
-            VkCommandBuffer         commandBuffer,
+            VKCommandContext&       context,
             VkImage                 dstImage,
             VkImageLayout           dstImageLayout,
             const TextureRegion&    dstRegion,
@@ -107,13 +97,13 @@ class VKSwapChain final : public SwapChain
         bool ResizeBuffersPrimary(const Extent2D& resolution) override;
 
         void CreateGpuSemaphore(VKPtr<VkSemaphore>& semaphore);
-        void CreatePresentSemaphores();
+        void CreateGpuFence(VKPtr<VkFence>& fence);
+        void CreatePresentSemaphoresAndFences();
         void CreateGpuSurface();
 
-        void CreateRenderPass(VKRenderPass& renderPass, bool isSecondary);
-        void CreateSecondaryRenderPass();
+        void CreateRenderPass(VKRenderPass& renderPass, AttachmentLoadOp loadOp, AttachmentStoreOp storeOp);
+        void CreateDefaultAndSecondaryRenderPass();
 
-        void CreateSwapChainRenderPass();
         void CreateSwapChain(const Extent2D& resolution, std::uint32_t vsyncInterval);
         void CreateSwapChainImageViews();
         void CreateSwapChainFramebuffers();
@@ -130,44 +120,47 @@ class VKSwapChain final : public SwapChain
         VkFormat PickDepthStencilFormat(int depthBits, int stencilBits) const;
         std::uint32_t PickSwapChainSize(std::uint32_t swapBuffers) const;
 
-        std::uint32_t GetPresentableImageIndex() const;
+        void AcquireNextColorBuffer();
 
     private:
 
-        static constexpr std::uint32_t maxNumColorBuffers = 3;
+        static constexpr std::uint32_t maxNumFramesInFlight = 3;
 
-        VkInstance              instance_                                   = VK_NULL_HANDLE;
-        VkPhysicalDevice        physicalDevice_                             = VK_NULL_HANDLE;
-        VkDevice                device_;
+        VkInstance                          instance_                                   = VK_NULL_HANDLE;
+        VkPhysicalDevice                    physicalDevice_                             = VK_NULL_HANDLE;
+        VkDevice                            device_;
 
-        VKDeviceMemoryManager&  deviceMemoryMngr_;
+        VKDeviceMemoryManager&              deviceMemoryMngr_;
 
-        VKPtr<VkSurfaceKHR>     surface_;
-        SurfaceSupportDetails   surfaceSupportDetails_;
+        VKPtr<VkSurfaceKHR>                 surface_;
+        VKSurfaceSupportDetails             surfaceSupportDetails_;
 
-        VKPtr<VkSwapchainKHR>   swapChain_;
-        VKRenderPass            swapChainRenderPass_;
-        VkSurfaceFormatKHR      swapChainFormat_                            = {};
-        std::uint32_t           swapChainSamples_                           = 1;
-        VkExtent2D              swapChainExtent_                            = { 0, 0 };
-        VkImage                 swapChainImages_[maxNumColorBuffers];
-        VKPtr<VkImageView>      swapChainImageViews_[maxNumColorBuffers];
-        VKPtr<VkFramebuffer>    swapChainFramebuffers_[maxNumColorBuffers];
+        VKPtr<VkSwapchainKHR>               swapChain_;
+        VKRenderPass                        swapChainRenderPass_;
+        VkSurfaceFormatKHR                  swapChainFormat_                            = {};
+        std::uint32_t                       swapChainSamples_                           = 1;
+        VkExtent2D                          swapChainExtent_                            = { 0, 0 };
+        std::vector<VkImage>                swapChainImages_;
+        std::vector<VKPtr<VkImageView>>     swapChainImageViews_;
+        std::vector<VKPtr<VkFramebuffer>>   swapChainFramebuffers_;
 
-        std::uint32_t           numColorBuffers_                            = 2;
-        std::uint32_t           currentColorBuffer_                         = 0;
-        std::uint32_t           vsyncInterval_                              = 0;
+        std::uint32_t                       numPreferredColorBuffers_                   = 2;
+        std::uint32_t                       numColorBuffers_                            = 0;
+        std::uint32_t                       currentColorBuffer_                         = 0; // determined by vkAcquireNextImageKHR
+        std::uint32_t                       currentFrameInFlight_                       = 0; // current index for maximum frames in flight
+        std::uint32_t                       vsyncInterval_                              = 0;
 
-        VKRenderPass            secondaryRenderPass_;
-        VkFormat                depthStencilFormat_                         = VK_FORMAT_UNDEFINED;
-        VKDepthStencilBuffer    depthStencilBuffer_;
-        VKColorBuffer           colorBuffers_[maxNumColorBuffers];
+        VKRenderPass                        secondaryRenderPass_;
+        VkFormat                            depthStencilFormat_                         = VK_FORMAT_UNDEFINED;
+        VKDepthStencilBuffer                depthStencilBuffer_;
+        std::vector<VKColorBuffer>          colorBuffers_;
 
-        VkQueue                 graphicsQueue_                              = VK_NULL_HANDLE;
-        VkQueue                 presentQueue_                               = VK_NULL_HANDLE;
+        VkQueue                             graphicsQueue_                              = VK_NULL_HANDLE;
+        VkQueue                             presentQueue_                               = VK_NULL_HANDLE;
 
-        VKPtr<VkSemaphore>      imageAvailableSemaphore_[maxNumColorBuffers];
-        VKPtr<VkSemaphore>      renderFinishedSemaphore_[maxNumColorBuffers];
+        VKPtr<VkSemaphore>                  imageAvailableSemaphore_[maxNumFramesInFlight];
+        VKPtr<VkSemaphore>                  renderFinishedSemaphore_[maxNumFramesInFlight];
+        VKPtr<VkFence>                      inFlightFences_[maxNumFramesInFlight];
 
 };
 

@@ -12,12 +12,15 @@
 #include "../Ext/GLExtensions.h"
 #include "../GLTypes.h"
 #include "../GLObjectUtils.h"
+#include "../../../Core/Exception.h"
 #include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
 {
 
+
+#if LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
 
 GLSeparableShader::GLSeparableShader(const ShaderDescriptor& desc) :
     GLShader { /*isSeparable:*/ true, desc }
@@ -28,6 +31,9 @@ GLSeparableShader::GLSeparableShader(const ShaderDescriptor& desc) :
         if (intermediateShader.GetID(PermutationFlippedYPosition) != 0)
             CreateAndLinkSeparableGLProgram(intermediateShader, PermutationFlippedYPosition);
     }
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
 GLSeparableShader::~GLSeparableShader()
@@ -35,7 +41,7 @@ GLSeparableShader::~GLSeparableShader()
     glDeleteProgram(GetID());
 }
 
-void GLSeparableShader::SetName(const char* name)
+void GLSeparableShader::SetDebugName(const char* name)
 {
     GLSetObjectLabel(GL_PROGRAM, GetID(), name);
 }
@@ -46,13 +52,13 @@ bool GLSeparableShader::Reflect(ShaderReflection& reflection) const
     return true;
 }
 
-void GLSeparableShader::BindResourceSlots(const GLShaderBindingLayout& bindingLayout)
+void GLSeparableShader::BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap)
 {
     if (bindingLayout_ != &bindingLayout)
     {
-        bindingLayout.UniformAndBlockBinding(GetID());
+        bindingLayout.UniformAndBlockBinding(GetID(), bufferInterfaceMap);
         if (GLuint id = GetID(PermutationFlippedYPosition))
-            bindingLayout.UniformAndBlockBinding(id);
+            bindingLayout.UniformAndBlockBinding(id, bufferInterfaceMap);
         bindingLayout_ = &bindingLayout;
     }
 }
@@ -121,6 +127,36 @@ bool GLSeparableShader::CreateAndLinkSeparableGLProgram(GLLegacyShader& intermed
 
     return status;
 }
+
+#else // LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
+GLSeparableShader::GLSeparableShader(const ShaderDescriptor& desc) :
+    GLShader { /*isSeparable:*/ true, desc }
+{
+    LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_separate_shader_objects");
+}
+
+void GLSeparableShader::SetDebugName(const char* name)
+{
+    // dummy
+}
+
+bool GLSeparableShader::Reflect(ShaderReflection& reflection) const
+{
+    return false; // dummy
+}
+
+void GLSeparableShader::BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap)
+{
+    // dummy
+}
+
+void GLSeparableShader::QueryInfoLog(std::string& text, bool& hasErrors)
+{
+    // dummy
+}
+
+#endif // /LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
 
 
 } // /namespace LLGL

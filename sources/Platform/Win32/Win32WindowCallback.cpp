@@ -42,7 +42,7 @@ static void PostKeyEvent(Window& window, Key keyCode, bool isDown)
 }
 
 // see https://msdn.microsoft.com/en-us/library/windows/desktop/ms646280(v=vs.85).aspx
-static void PostKeyEvent(HWND wnd, WPARAM wParam, LPARAM lParam, bool isDown, bool isSysKey)
+static void PostKeyEvent(HWND wnd, WPARAM wParam, LPARAM lParam, bool isDown, bool /*isSysKey*/)
 {
     /* Get window object from window handle */
     if (Win32Window* window = GetWindowFromUserData(wnd))
@@ -75,6 +75,9 @@ static void PostKeyEvent(HWND wnd, WPARAM wParam, LPARAM lParam, bool isDown, bo
                     PostKeyEvent(*window, Key::LControl, isDown);
             }
             break;
+
+            default:
+            break;
         }
 
         /* Post base key event */
@@ -82,7 +85,7 @@ static void PostKeyEvent(HWND wnd, WPARAM wParam, LPARAM lParam, bool isDown, bo
     }
 }
 
-static std::atomic_int g_mouseCaptureCounter = 0;
+static std::atomic_int g_mouseCaptureCounter{ 0 };
 
 static void ReleaseMouseCapture()
 {

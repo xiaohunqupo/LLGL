@@ -7,7 +7,6 @@
 
 #include "GLBufferArrayWithVAO.h"
 #include "GLBufferWithVAO.h"
-#include "../GLObjectUtils.h"
 #include "../RenderState/GLStateManager.h"
 #include "../../CheckedCast.h"
 #include "../../../Core/CoreUtils.h"
@@ -21,90 +20,28 @@ namespace LLGL
 GLBufferArrayWithVAO::GLBufferArrayWithVAO(std::uint32_t numBuffers, Buffer* const * bufferArray) :
     GLBufferArray { numBuffers, bufferArray }
 {
-    #ifdef LLGL_GL_ENABLE_OPENGL2X
-    if (!HasNativeVAO())
+    /* Build vertex array and finalize afterwards as it references multiple buffers */
+    while (GLBuffer* bufferGL = NextArrayResource<GLBuffer>(numBuffers, bufferArray))
     {
-        /* Build vertex array with emulator (for GL 2.x compatibility) */
-        BuildVertexArrayWithEmulator(numBuffers, bufferArray);
-    }
-    else
-    #endif // /LLGL_GL_ENABLE_OPENGL2X
-    {
-        /* Build vertex array with native VAO */
-        BuildVertexArrayWithVAO(numBuffers, bufferArray);
-    }
-}
-
-void GLBufferArrayWithVAO::SetName(const char* name)
-{
-    #ifdef LLGL_GL_ENABLE_OPENGL2X
-    if (HasNativeVAO())
-    #endif
-    {
-        /* Set label for VAO */
-        GLSetObjectLabel(GL_VERTEX_ARRAY, vao_.GetID(), name);
-    }
-}
-
-
-/*
- * ======= Private: =======
- */
-
-[[noreturn]]
-static void ThrowNoVertexBufferErr()
-{
-    throw std::invalid_argument(
-        "cannot build vertex array with buffer that was not created with the 'LLGL::BindFlags::VertexBuffer' flag"
-    );
-}
-
-void GLBufferArrayWithVAO::BuildVertexArrayWithVAO(std::uint32_t numBuffers, Buffer* const * bufferArray)
-{
-    /* Bind VAO */
-    GLStateManager::Get().BindVertexArray(GetVaoID());
-    {
-        while (auto bufferGL = NextArrayResource<GLBuffer>(numBuffers, bufferArray))
+        if ((bufferGL->GetBindFlags() & BindFlags::VertexBuffer) != 0)
         {
-            if ((bufferGL->GetBindFlags() & BindFlags::VertexBuffer) != 0)
-            {
-                /* Bind VBO */
-                auto vertexBufferGL = LLGL_CAST(GLBufferWithVAO*, bufferGL);
-                GLStateManager::Get().BindBuffer(GLBufferTarget::ArrayBuffer, vertexBufferGL->GetID());
-
-                /* Build each vertex attribute */
-                const auto& vertexAttribs = vertexBufferGL->GetVertexAttribs();
-                for (const auto& attrib : vertexAttribs)
-                    vao_.BuildVertexAttribute(attrib);
-            }
-            else
-                ThrowNoVertexBufferErr();
-        }
-    }
-    GLStateManager::Get().BindVertexArray(0);
-}
-
-#ifdef LLGL_GL_ENABLE_OPENGL2X
-
-void GLBufferArrayWithVAO::BuildVertexArrayWithEmulator(std::uint32_t numBuffers, Buffer* const * bufferArray)
-{
-    while (numBuffers-- > 0)
-    {
-        if (((*bufferArray)->GetBindFlags() & BindFlags::VertexBuffer) != 0)
-        {
-            auto vertexBufferGL = LLGL_CAST(GLBufferWithVAO*, (*bufferArray++));
-
-            /* Build each vertex attribute */
-            const auto& vertexAttribs = vertexBufferGL->GetVertexAttribs();
-            for (const auto& attrib : vertexAttribs)
-                vertexArrayGL2X_.BuildVertexAttribute(vertexBufferGL->GetID(), attrib);
+            /* Bind VBO and build vertex layout */
+            auto* vertexBufferGL = LLGL_CAST(GLBufferWithVAO*, bufferGL);
+            GLStateManager::Get().BindBuffer(GLBufferTarget::ArrayBuffer, vertexBufferGL->GetID());
+            vertexArray_.BuildVertexLayout(vertexBufferGL->GetID(), vertexBufferGL->GetVertexAttribs());
         }
         else
-            ThrowNoVertexBufferErr();
+        {
+            LLGL_TRAP("cannot build vertex array with buffer that was not created with the 'LLGL::BindFlags::VertexBuffer' flag");
+        }
     }
+    vertexArray_.Finalize();
 }
 
-#endif // /LLGL_GL_ENABLE_OPENGL2X
+void GLBufferArrayWithVAO::SetDebugName(const char* name)
+{
+    vertexArray_.SetDebugName(name);
+}
 
 
 } // /namespace LLGL

@@ -36,20 +36,11 @@ class D3D12SwapChain final : public SwapChain
 
     public:
 
-        void SetName(const char* name) override;
+        #include <LLGL/Backend/SwapChain.inl>
 
-        void Present() override;
+    public:
 
-        std::uint32_t GetCurrentSwapIndex() const override;
-        std::uint32_t GetNumSwapBuffers() const override;
-        std::uint32_t GetSamples() const override;
-
-        Format GetColorFormat() const override;
-        Format GetDepthStencilFormat() const override;
-
-        const RenderPass* GetRenderPass() const override;
-
-        bool SetVsyncInterval(std::uint32_t vsyncInterval) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
@@ -89,6 +80,9 @@ class D3D12SwapChain final : public SwapChain
 
     private:
 
+        static constexpr UINT maxNumColorBuffers    = 3;
+        static constexpr UINT numDebugNames         = maxNumColorBuffers*2 + 1;
+
         bool ResizeBuffersPrimary(const Extent2D& resolution) override;
 
         bool SetPresentSyncInterval(UINT syncInterval);
@@ -101,9 +95,10 @@ class D3D12SwapChain final : public SwapChain
 
         void MoveToNextFrame();
 
-    private:
+        void StoreDebugNames(std::string (&debugNames)[D3D12SwapChain::numDebugNames]);
+        void RestoreDebugNames(const std::string (&debugNames)[D3D12SwapChain::numDebugNames]);
 
-        static constexpr UINT maxNumColorBuffers = 3;
+    private:
 
         D3D12RenderSystem&              renderSystem_;  // reference to its render system
         D3D12CommandQueue*              commandQueue_                           = nullptr;
@@ -129,6 +124,11 @@ class D3D12SwapChain final : public SwapChain
 
         UINT                            numColorBuffers_                        = 0;
         UINT                            currentColorBuffer_                     = 0;
+
+        bool                            hasDebugName_                           = false;
+        bool                            tearingSupported_                       = false;
+        bool                            windowedMode_                           = false;
+        bool                            isPresentationDirty_                    = false; // Has the back buffer been resized before it was presented again?
 
 };
 

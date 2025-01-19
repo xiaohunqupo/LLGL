@@ -10,6 +10,7 @@
 
 
 #include <LLGL/CommandQueue.h>
+#include <LLGL/QueryHeapFlags.h>
 #include "D3D12CommandContext.h"
 #include "../RenderState/D3D12Fence.h"
 #include "../../DXCommon/ComPtr.h"
@@ -37,12 +38,16 @@ class D3D12CommandQueue final : public CommandQueue
             D3D12_COMMAND_LIST_TYPE type = D3D12_COMMAND_LIST_TYPE_DIRECT
         );
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
         // Submits the specified fence with a custom value.
         void SignalFence(ID3D12Fence* fence, UINT64 value);
+
+        // Executes the command context and encodes resource transitions if the context has cached barriers.
+        void SubmitCommandContext(D3D12CommandContext& commandContext);
+        void FinishAndSubmitCommandContext(D3D12CommandContext& commandContext, bool syncWithGPU = false);
 
         // Executes the specified command lists.
         void ExecuteCommandLists(UINT numCommandsLists, ID3D12CommandList* const* commandLists);
@@ -65,14 +70,14 @@ class D3D12CommandQueue final : public CommandQueue
         void DetermineTimestampFrequency();
 
         void QueryResultSingleUInt64(
-            D3D12_QUERY_TYPE    queryType,
+            QueryType           queryType,
             const void*         mappedData,
             std::uint32_t       query,
             std::uint64_t&      data
         );
 
         void QueryResultUInt32(
-            D3D12_QUERY_TYPE    queryType,
+            QueryType           queryType,
             const void*         mappedData,
             std::uint32_t       firstQuery,
             std::uint32_t       numQueries,
@@ -80,7 +85,7 @@ class D3D12CommandQueue final : public CommandQueue
         );
 
         void QueryResultUInt64(
-            D3D12_QUERY_TYPE    queryType,
+            QueryType           queryType,
             const void*         mappedData,
             std::uint32_t       firstQuery,
             std::uint32_t       numQueries,
@@ -88,7 +93,7 @@ class D3D12CommandQueue final : public CommandQueue
         );
 
         bool QueryResultPipelineStatistics(
-            D3D12_QUERY_TYPE            queryType,
+            QueryType                   queryType,
             const void*                 mappedData,
             std::uint32_t               firstQuery,
             std::uint32_t               numQueries,

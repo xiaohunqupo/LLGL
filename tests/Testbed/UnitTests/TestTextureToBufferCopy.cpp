@@ -9,6 +9,10 @@
 #include "Testset.h"
 
 
+/*
+Tests the CopyTextureFromBuffer() and CopyBufferFromTexture() functions starting from a texture with various texture formats.
+There is no rendering. The values are only validated via ReadTexture().
+*/
 DEF_TEST( TextureToBufferCopy )
 {
     auto CopyToBufferAndReadback = [this](
@@ -153,7 +157,10 @@ DEF_TEST( TextureToBufferCopy )
                 cmdBuffer->End();
 
                 // Read back image data from destination texture and compare it with source texture image
-                srcTexImage.resize(bufSize);
+                const std::uint32_t numMipTexels    = srcRegion.extent.width * srcRegion.extent.height * srcRegion.extent.depth;
+                const std::size_t   subBufSize      = GetMemoryFootprint(format, numMipTexels);
+
+                srcTexImage.resize(subBufSize);
                 MutableImageView srcTexImageView;
                 {
                     srcTexImageView.format      = formatAttribs.format;
@@ -162,7 +169,7 @@ DEF_TEST( TextureToBufferCopy )
                     srcTexImageView.dataSize    = srcTexImage.size();
                 }
 
-                dstTexImage.resize(bufSize);
+                dstTexImage.resize(subBufSize);
                 MutableImageView dstTexImageView;
                 {
                     dstTexImageView.format      = formatAttribs.format;
@@ -174,11 +181,12 @@ DEF_TEST( TextureToBufferCopy )
                 renderer->ReadTexture(*srcTex, srcRegion, srcTexImageView);
                 renderer->ReadTexture(*dstTex, dstRegion, dstTexImageView);
 
-                if (::memcmp(srcTexImage.data(), dstTexImage.data(), bufSize) != 0)
+                if (::memcmp(srcTexImage.data(), dstTexImage.data(), subBufSize) != 0)
                 {
                     const std::string srcDataStr = TestbedContext::FormatByteArray(srcTexImage.data(), srcTexImage.size(), 4, formatAsFloats);
                     const std::string dstDataStr = TestbedContext::FormatByteArray(dstTexImage.data(), dstTexImage.size(), 4, formatAsFloats);
                     Log::Errorf(
+                        Log::ColorFlags::StdError,
                         "Mismatch between data of texture %s [MIP %u, Layer %u] and copy result:\n"
                         " -> Expected: [%s]\n"
                         " -> Actual:   [%s]\n",
@@ -186,10 +194,11 @@ DEF_TEST( TextureToBufferCopy )
                     );
                     return TestResult::FailedMismatch;
                 }
-                else if (sanityCheck)
+                else if (opt.sanityCheck)
                 {
                     const std::string dataStr = TestbedContext::FormatByteArray(srcTexImage.data(), srcTexImage.size(), 4, formatAsFloats);
                     Log::Printf(
+                        Log::ColorFlags::StdAnnotation,
                         "Sanity check for texture %s [MIP %u, Layer %u]:\n"
                         " -> Data: [%s]\n",
                         name, mip, layer, dataStr.c_str()
@@ -207,7 +216,7 @@ DEF_TEST( TextureToBufferCopy )
         renderer->Release(*dstTex);
 
         // Print duration
-        if (showTiming)
+        if (opt.showTiming)
         {
             const std::uint64_t t1 = Timer::Tick();
             Log::Printf("Copy texture to buffer: %s ( %f ms )\n", name, TestbedContext::ToMillisecs(t0, t1));

@@ -11,14 +11,14 @@
 #define LLGL_C99_LLGLWRAPPER_H
 
 
-#include <stdint.h>
-#include <stddef.h>
 #include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
 #include <LLGL-C/Types.h>
 
-#if defined LLGL_OS_ANDROID
+#if __ANDROID__
 #   include <android_native_app_glue.h>
-#endif /* defined LLGL_OS_ANDROID */
+#endif /* __ANDROID__ */
 
 
 /* ----- Constants ----- */
@@ -26,19 +26,30 @@
 #define LLGL_RENDERERID_UNDEFINED   ( 0x00000000 )
 #define LLGL_RENDERERID_NULL        ( 0x00000001 )
 #define LLGL_RENDERERID_OPENGL      ( 0x00000002 )
-#define LLGL_RENDERERID_OPENGLES1   ( 0x00000003 )
-#define LLGL_RENDERERID_OPENGLES2   ( 0x00000004 )
-#define LLGL_RENDERERID_OPENGLES3   ( 0x00000005 )
+#define LLGL_RENDERERID_OPENGLES    ( 0x00000003 )
+#define LLGL_RENDERERID_WEBGL       ( 0x00000004 )
+#define LLGL_RENDERERID_WEBGPU      ( 0x00000005 )
 #define LLGL_RENDERERID_DIRECT3D9   ( 0x00000006 )
 #define LLGL_RENDERERID_DIRECT3D10  ( 0x00000007 )
 #define LLGL_RENDERERID_DIRECT3D11  ( 0x00000008 )
 #define LLGL_RENDERERID_DIRECT3D12  ( 0x00000009 )
 #define LLGL_RENDERERID_VULKAN      ( 0x0000000A )
 #define LLGL_RENDERERID_METAL       ( 0x0000000B )
+#define LLGL_RENDERERID_OPENGLES1   ( LLGL_RENDERERID_OPENGLES )
+#define LLGL_RENDERERID_OPENGLES2   ( LLGL_RENDERERID_OPENGLES )
+#define LLGL_RENDERERID_OPENGLES3   ( LLGL_RENDERERID_OPENGLES )
 #define LLGL_RENDERERID_RESERVED    ( 0x000000FF )
 
 
 /* ----- Enumerations ----- */
+
+typedef enum LLGLEventAction
+{
+    LLGLEventActionBegan,
+    LLGLEventActionChanged,
+    LLGLEventActionEnded,
+}
+LLGLEventAction;
 
 typedef enum LLGLRenderConditionMode
 {
@@ -142,6 +153,37 @@ typedef enum LLGLFormat
     LLGLFormatBC4SNorm,
     LLGLFormatBC5UNorm,
     LLGLFormatBC5SNorm,
+    LLGLFormatASTC4x4,
+    LLGLFormatASTC4x4_sRGB,
+    LLGLFormatASTC5x4,
+    LLGLFormatASTC5x4_sRGB,
+    LLGLFormatASTC5x5,
+    LLGLFormatASTC5x5_sRGB,
+    LLGLFormatASTC6x5,
+    LLGLFormatASTC6x5_sRGB,
+    LLGLFormatASTC6x6,
+    LLGLFormatASTC6x6_sRGB,
+    LLGLFormatASTC8x5,
+    LLGLFormatASTC8x5_sRGB,
+    LLGLFormatASTC8x6,
+    LLGLFormatASTC8x6_sRGB,
+    LLGLFormatASTC8x8,
+    LLGLFormatASTC8x8_sRGB,
+    LLGLFormatASTC10x5,
+    LLGLFormatASTC10x5_sRGB,
+    LLGLFormatASTC10x6,
+    LLGLFormatASTC10x6_sRGB,
+    LLGLFormatASTC10x8,
+    LLGLFormatASTC10x8_sRGB,
+    LLGLFormatASTC10x10,
+    LLGLFormatASTC10x10_sRGB,
+    LLGLFormatASTC12x10,
+    LLGLFormatASTC12x10_sRGB,
+    LLGLFormatASTC12x12,
+    LLGLFormatASTC12x12_sRGB,
+    LLGLFormatETC1UNorm,
+    LLGLFormatETC2UNorm,
+    LLGLFormatETC2UNorm_sRGB,
 }
 LLGLFormat;
 
@@ -159,6 +201,7 @@ typedef enum LLGLImageFormat
     LLGLImageFormatDepth,
     LLGLImageFormatDepthStencil,
     LLGLImageFormatStencil,
+    LLGLImageFormatCompressed,
     LLGLImageFormatBC1,
     LLGLImageFormatBC2,
     LLGLImageFormatBC3,
@@ -622,16 +665,24 @@ typedef enum LLGLShadingLanguage
     LLGLShadingLanguageHLSL_5_0       = (0x30000|500),
     LLGLShadingLanguageHLSL_5_1       = (0x30000|510),
     LLGLShadingLanguageHLSL_6_0       = (0x30000|600),
-    LLGLShadingLanguageHLSL_6_1       = (0x30000|601),
-    LLGLShadingLanguageHLSL_6_2       = (0x30000|602),
-    LLGLShadingLanguageHLSL_6_3       = (0x30000|603),
-    LLGLShadingLanguageHLSL_6_4       = (0x30000|604),
+    LLGLShadingLanguageHLSL_6_1       = (0x30000|610),
+    LLGLShadingLanguageHLSL_6_2       = (0x30000|620),
+    LLGLShadingLanguageHLSL_6_3       = (0x30000|630),
+    LLGLShadingLanguageHLSL_6_4       = (0x30000|640),
+    LLGLShadingLanguageHLSL_6_5       = (0x30000|650),
+    LLGLShadingLanguageHLSL_6_6       = (0x30000|660),
+    LLGLShadingLanguageHLSL_6_7       = (0x30000|670),
+    LLGLShadingLanguageHLSL_6_8       = (0x30000|680),
     LLGLShadingLanguageMetal          = (0x40000),
     LLGLShadingLanguageMetal_1_0      = (0x40000|100),
     LLGLShadingLanguageMetal_1_1      = (0x40000|110),
     LLGLShadingLanguageMetal_1_2      = (0x40000|120),
     LLGLShadingLanguageMetal_2_0      = (0x40000|200),
     LLGLShadingLanguageMetal_2_1      = (0x40000|210),
+    LLGLShadingLanguageMetal_2_2      = (0x40000|220),
+    LLGLShadingLanguageMetal_2_3      = (0x40000|230),
+    LLGLShadingLanguageMetal_2_4      = (0x40000|240),
+    LLGLShadingLanguageMetal_3_0      = (0x40000|300),
     LLGLShadingLanguageSPIRV          = (0x50000),
     LLGLShadingLanguageSPIRV_100      = (0x50000|100),
     LLGLShadingLanguageVersionBitmask = 0x0000ffff,
@@ -820,6 +871,47 @@ typedef enum LLGLFormatFlags
 }
 LLGLFormatFlags;
 
+typedef enum LLGLStdOutFlags
+{
+    LLGLStdOutColored = (1 << 0),
+}
+LLGLStdOutFlags;
+
+typedef enum LLGLColorFlags
+{
+    LLGLColorDefault       = (1 << 0),
+    LLGLColorRed           = (1 << 1),
+    LLGLColorGreen         = (1 << 2),
+    LLGLColorBlue          = (1 << 3),
+    LLGLColorBright        = (1 << 4),
+    LLGLColorBold          = (1 << 5),
+    LLGLColorUnderline     = (1 << 6),
+    LLGLColorFullRGB       = (1 << 7),
+    LLGLColorYellow        = (LLGLColorRed | LLGLColorGreen),
+    LLGLColorPink          = (LLGLColorRed | LLGLColorBlue),
+    LLGLColorCyan          = (LLGLColorGreen | LLGLColorBlue),
+    LLGLColorGray          = (LLGLColorRed | LLGLColorGreen | LLGLColorBlue),
+    LLGLColorBrightRed     = (LLGLColorBright | LLGLColorRed),
+    LLGLColorBrightGreen   = (LLGLColorBright | LLGLColorGreen),
+    LLGLColorBrightBlue    = (LLGLColorBright | LLGLColorBlue),
+    LLGLColorBrightYellow  = (LLGLColorBright | LLGLColorYellow),
+    LLGLColorBrightPink    = (LLGLColorBright | LLGLColorPink),
+    LLGLColorBrightCyan    = (LLGLColorBright | LLGLColorCyan),
+    LLGLColorWhite         = (LLGLColorBright | LLGLColorGray),
+    LLGLColorStdError      = (LLGLColorBold | LLGLColorRed),
+    LLGLColorStdWarning    = (LLGLColorBold | LLGLColorBrightYellow),
+    LLGLColorStdAnnotation = (LLGLColorBold | LLGLColorBrightPink),
+}
+LLGLColorFlags;
+
+typedef enum LLGLBarrierFlags
+{
+    LLGLBarrierStorageBuffer  = (1 << 0),
+    LLGLBarrierStorageTexture = (1 << 1),
+    LLGLBarrierStorage        = (LLGLBarrierStorageBuffer | LLGLBarrierStorageTexture),
+}
+LLGLBarrierFlags;
+
 typedef enum LLGLColorMaskFlags
 {
     LLGLColorMaskZero = 0,
@@ -874,14 +966,6 @@ typedef enum LLGLMiscFlags
     LLGLMiscCounter       = (1 << 5),
 }
 LLGLMiscFlags;
-
-typedef enum LLGLBarrierFlags
-{
-    LLGLBarrierStorageBuffer  = (1 << 0),
-    LLGLBarrierStorageTexture = (1 << 1),
-    LLGLBarrierStorage        = (LLGLBarrierStorageBuffer | LLGLBarrierStorageTexture),
-}
-LLGLBarrierFlags;
 
 typedef enum LLGLShaderCompileFlags
 {
@@ -951,9 +1035,11 @@ LLGLClearValue;
 
 typedef struct LLGLCommandBufferDescriptor
 {
-    long     flags;              /* = 0 */
-    uint32_t numNativeBuffers;   /* = 2 */
-    uint64_t minStagingPoolSize; /* = (0xFFFF+1) */
+    const char*    debugName;          /* = NULL */
+    long           flags;              /* = 0 */
+    uint32_t       numNativeBuffers;   /* = 0 */
+    uint64_t       minStagingPoolSize; /* = (0xFFFF+1) */
+    LLGLRenderPass renderPass;         /* = LLGL_NULL_OBJECT */
 }
 LLGLCommandBufferDescriptor;
 
@@ -990,6 +1076,13 @@ typedef struct LLGLDispatchIndirectArguments
     uint32_t numThreadGroups[3];
 }
 LLGLDispatchIndirectArguments;
+
+typedef struct LLGLColorCodes
+{
+    long textFlags;       /* = 0 */
+    long backgroundFlags; /* = 0 */
+}
+LLGLColorCodes;
 
 typedef struct LLGLBindingSlot
 {
@@ -1028,6 +1121,7 @@ LLGLDepthBiasDescriptor;
 
 typedef struct LLGLComputePipelineDescriptor
 {
+    const char*        debugName;      /* = NULL */
     LLGLPipelineLayout pipelineLayout; /* = LLGL_NULL_OBJECT */
     LLGLShader         computeShader;  /* = LLGL_NULL_OBJECT */
 }
@@ -1051,8 +1145,10 @@ LLGLQueryPipelineStatistics;
 
 typedef struct LLGLProfileTimeRecord
 {
-    const char* annotation;  /* = "" */
-    uint64_t    elapsedTime; /* = 0 */
+    const char* annotation;    /* = "" */
+    uint64_t    cpuTicksStart; /* = 0 */
+    uint64_t    cpuTicksEnd;   /* = 0 */
+    uint64_t    elapsedTime;   /* = 0 */
 }
 LLGLProfileTimeRecord;
 
@@ -1175,9 +1271,10 @@ LLGLRenderingLimits;
 
 typedef struct LLGLResourceHeapDescriptor
 {
+    const char*        debugName;        /* = NULL */
     LLGLPipelineLayout pipelineLayout;   /* = LLGL_NULL_OBJECT */
     uint32_t           numResourceViews; /* = 0 */
-    long               barrierFlags;     /* = 0 */
+    long               barrierFlags;     /* ResourceHeapDescriptor.barrierFlags is deprecated since 0.04b; Use PipelineLayoutDescriptor.barrierFlags instead! */
 }
 LLGLResourceHeapDescriptor;
 
@@ -1319,6 +1416,15 @@ typedef struct LLGLUniformDescriptor
 }
 LLGLUniformDescriptor;
 
+typedef struct LLGLCombinedTextureSamplerDescriptor
+{
+    const char*     name;
+    const char*     textureName;
+    const char*     samplerName;
+    LLGLBindingSlot slot;
+}
+LLGLCombinedTextureSamplerDescriptor;
+
 typedef struct LLGLDepthDescriptor
 {
     bool          testEnabled;  /* = false */
@@ -1378,6 +1484,7 @@ LLGLTessellationDescriptor;
 
 typedef struct LLGLQueryHeapDescriptor
 {
+    const char*   debugName;       /* = NULL */
     LLGLQueryType type;            /* = LLGLQueryTypeSamplesPassed */
     uint32_t      numQueries;      /* = 1 */
     bool          renderCondition; /* = false */
@@ -1409,9 +1516,11 @@ typedef struct LLGLRenderSystemDescriptor
     LLGLRenderingDebugger debugger;           /* = LLGL_NULL_OBJECT */
     const void*           rendererConfig;     /* = NULL */
     size_t                rendererConfigSize; /* = 0 */
-#if defined LLGL_OS_ANDROID
-    android_app*          androidApp;
-#endif /* defined LLGL_OS_ANDROID */
+    const void*           nativeHandle;       /* = NULL */
+    size_t                nativeHandleSize;   /* = 0 */
+#if __ANDROID__
+    struct android_app*   androidApp;         /* = NULL */
+#endif /* __ANDROID__ */
 }
 LLGLRenderSystemDescriptor;
 
@@ -1439,6 +1548,7 @@ LLGLAttachmentDescriptor;
 
 typedef struct LLGLSamplerDescriptor
 {
+    const char*            debugName;      /* = NULL */
     LLGLSamplerAddressMode addressModeU;   /* = LLGLSamplerAddressModeRepeat */
     LLGLSamplerAddressMode addressModeV;   /* = LLGLSamplerAddressModeRepeat */
     LLGLSamplerAddressMode addressModeW;   /* = LLGLSamplerAddressModeRepeat */
@@ -1464,6 +1574,7 @@ LLGLComputeShaderAttributes;
 
 typedef struct LLGLSwapChainDescriptor
 {
+    const char*  debugName;   /* = NULL */
     LLGLExtent2D resolution;
     int          colorBits;   /* = 32 */
     int          depthBits;   /* = 24 */
@@ -1501,14 +1612,16 @@ LLGLTextureRegion;
 
 typedef struct LLGLTextureDescriptor
 {
-    LLGLTextureType type;        /* = LLGLTextureTypeTexture2D */
-    long            bindFlags;   /* = (LLGLBindSampled | LLGLBindColorAttachment) */
-    long            miscFlags;   /* = (LLGLMiscFixedSamples | LLGLMiscGenerateMips) */
-    LLGLFormat      format;      /* = LLGLFormatRGBA8UNorm */
-    LLGLExtent3D    extent;      /* = {1,1,1} */
-    uint32_t        arrayLayers; /* = 1 */
-    uint32_t        mipLevels;   /* = 0 */
-    uint32_t        samples;     /* = 1 */
+    const char*     debugName;      /* = NULL */
+    LLGLTextureType type;           /* = LLGLTextureTypeTexture2D */
+    long            bindFlags;      /* = (LLGLBindSampled | LLGLBindColorAttachment) */
+    long            cpuAccessFlags; /* = (LLGLCPUAccessRead | LLGLCPUAccessWrite) */
+    long            miscFlags;      /* = (LLGLMiscFixedSamples | LLGLMiscGenerateMips) */
+    LLGLFormat      format;         /* = LLGLFormatRGBA8UNorm */
+    LLGLExtent3D    extent;         /* = {1,1,1} */
+    uint32_t        arrayLayers;    /* = 1 */
+    uint32_t        mipLevels;      /* = 0 */
+    uint32_t        samples;        /* = 1 */
     LLGLClearValue  clearValue;
 }
 LLGLTextureDescriptor;
@@ -1540,6 +1653,7 @@ LLGLWindowDescriptor;
 
 typedef struct LLGLBufferDescriptor
 {
+    const char*                debugName;        /* = NULL */
     uint64_t                   size;             /* = 0 */
     uint32_t                   stride;           /* = 0 */
     LLGLFormat                 format;           /* = LLGLFormatUndefined */
@@ -1583,6 +1697,7 @@ LLGLBlendDescriptor;
 
 typedef struct LLGLRenderPassDescriptor
 {
+    const char*                    debugName;           /* = NULL */
     LLGLAttachmentFormatDescriptor colorAttachments[8];
     LLGLAttachmentFormatDescriptor depthAttachment;
     LLGLAttachmentFormatDescriptor stencilAttachment;
@@ -1592,6 +1707,7 @@ LLGLRenderPassDescriptor;
 
 typedef struct LLGLRenderTargetDescriptor
 {
+    const char*              debugName;              /* = NULL */
     LLGLRenderPass           renderPass;             /* = LLGL_NULL_OBJECT */
     LLGLExtent2D             resolution;
     uint32_t                 samples;                /* = 1 */
@@ -1636,19 +1752,24 @@ LLGLTextureViewDescriptor;
 
 typedef struct LLGLPipelineLayoutDescriptor
 {
-    size_t                             numHeapBindings;   /* = 0 */
-    const LLGLBindingDescriptor*       heapBindings;      /* = NULL */
-    size_t                             numBindings;       /* = 0 */
-    const LLGLBindingDescriptor*       bindings;          /* = NULL */
-    size_t                             numStaticSamplers; /* = 0 */
-    const LLGLStaticSamplerDescriptor* staticSamplers;    /* = NULL */
-    size_t                             numUniforms;       /* = 0 */
-    const LLGLUniformDescriptor*       uniforms;          /* = NULL */
+    const char*                                 debugName;                  /* = NULL */
+    size_t                                      numHeapBindings;            /* = 0 */
+    const LLGLBindingDescriptor*                heapBindings;               /* = NULL */
+    size_t                                      numBindings;                /* = 0 */
+    const LLGLBindingDescriptor*                bindings;                   /* = NULL */
+    size_t                                      numStaticSamplers;          /* = 0 */
+    const LLGLStaticSamplerDescriptor*          staticSamplers;             /* = NULL */
+    size_t                                      numUniforms;                /* = 0 */
+    const LLGLUniformDescriptor*                uniforms;                   /* = NULL */
+    size_t                                      numCombinedTextureSamplers; /* = 0 */
+    const LLGLCombinedTextureSamplerDescriptor* combinedTextureSamplers;    /* = NULL */
+    long                                        barrierFlags;               /* = 0 */
 }
 LLGLPipelineLayoutDescriptor;
 
 typedef struct LLGLGraphicsPipelineDescriptor
 {
+    const char*                debugName;            /* = NULL */
     LLGLPipelineLayout         pipelineLayout;       /* = LLGL_NULL_OBJECT */
     LLGLRenderPass             renderPass;           /* = LLGL_NULL_OBJECT */
     LLGLShader                 vertexShader;         /* = LLGL_NULL_OBJECT */
@@ -1681,6 +1802,7 @@ LLGLResourceViewDescriptor;
 
 typedef struct LLGLShaderDescriptor
 {
+    const char*                  debugName;  /* = NULL */
     LLGLShaderType               type;       /* = LLGLShaderTypeUndefined */
     const char*                  source;     /* = NULL */
     size_t                       sourceSize; /* = 0 */
@@ -1689,7 +1811,7 @@ typedef struct LLGLShaderDescriptor
     const char*                  profile;    /* = NULL */
     const LLGLShaderMacro*       defines;    /* = NULL */
     long                         flags;      /* = 0 */
-    const char*                  name;       /* = NULL */
+    const char*                  name;       /* ShaderDescriptor.name is deprecated since 0.04b; Use ShaderDescriptor.debugName instead! */
     LLGLVertexShaderAttributes   vertex;
     LLGLFragmentShaderAttributes fragment;
     LLGLComputeShaderAttributes  compute;

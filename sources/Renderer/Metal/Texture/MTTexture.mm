@@ -10,6 +10,8 @@
 #include "../MTDevice.h"
 #include "../Buffer/MTIntermediateBuffer.h"
 #include "../../TextureUtils.h"
+#include "../../../Core/CoreUtils.h"
+#include <LLGL/Backend/Metal/NativeHandle.h>
 #include <LLGL/TextureFlags.h>
 #include <LLGL/ImageFlags.h>
 #include <LLGL/Utils/ForRange.h>
@@ -100,6 +102,18 @@ MTTexture::MTTexture(id<MTLDevice> device, const TextureDescriptor& desc) :
 MTTexture::~MTTexture()
 {
     [native_ release];
+}
+
+bool MTTexture::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    if (auto* nativeHandleMT = GetTypedNativeHandle<Metal::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
+    {
+        nativeHandleMT->type    = Metal::ResourceNativeType::Texture;
+        nativeHandleMT->texture = GetNative();
+        [nativeHandleMT->texture retain];
+        return true;
+    }
+    return false;
 }
 
 Extent3D MTTexture::GetMipExtent(std::uint32_t mipLevel) const
@@ -203,7 +217,7 @@ void MTTexture::WriteRegion(const TextureRegion& textureRegion, const ImageView&
         intermediateData = ConvertImageBuffer(srcImageView, formatAttribs.format, formatAttribs.dataType, /*cfg.threadCount*/0);
         if (intermediateData)
         {
-            /* User converted tempoary buffer as image source */
+            /* User converted temporary buffer as image source */
             imageData = intermediateData.get();
         }
     }

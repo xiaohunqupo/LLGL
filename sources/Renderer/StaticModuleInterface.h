@@ -8,7 +8,7 @@
 #ifndef LLGL_STATIC_MODULE_INTERFACE_H
 #define LLGL_STATIC_MODULE_INTERFACE_H
 
-#ifdef LLGL_BUILD_STATIC_LIB
+#if LLGL_BUILD_STATIC_LIB
 
 
 #include <LLGL/RenderSystemFlags.h>
@@ -20,7 +20,7 @@ namespace LLGL
 
 class RenderSystem;
 
-namespace StaticModule
+namespace StaticModules
 {
 
 
@@ -28,16 +28,16 @@ namespace StaticModule
 std::vector<std::string> GetStaticModules();
 
 // Returns the renderer name of the specified module (module name "Direct3D11" may result in "Direct3D 11" for instance).
-const char* GetRendererName(const std::string& moduleName);
+const char* GetRendererName(const StringLiteral& moduleName);
 
 // Returns the renderer ID of the specified module.
-int GetRendererID(const std::string& moduleName);
+int GetRendererID(const StringLiteral& moduleName);
 
 // Allocates a new renderer system of the specified module. This is an owning raw pointer!
 RenderSystem* AllocRenderSystem(const RenderSystemDescriptor& renderSystemDesc);
 
 
-} // /namespace StaticModule
+} // /namespace StaticModules
 
 } // /namespace LLGL
 

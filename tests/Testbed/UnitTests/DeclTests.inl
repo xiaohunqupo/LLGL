@@ -8,23 +8,41 @@
 
 /* --- Renderer independent (RI) tests --- */
 
-#define DECL_RITEST(NAME) \
-    static TestResult Test##NAME()
+#ifndef DECL_RITEST
+#   ifdef GATHER_KNOWN_TESTS
+#       define DECL_RITEST(NAME) \
+            knownTests.push_back(#NAME)
+#   else
+#       define DECL_RITEST(NAME) \
+            static TestResult Test##NAME(const Options& opt)
+#   endif
+#endif
 
 DECL_RITEST( ContainerDynamicArray );
 DECL_RITEST( ContainerSmallVector );
 DECL_RITEST( ContainerUTF8String );
+DECL_RITEST( ContainerStringLiteral );
+DECL_RITEST( ContainerStringOperators );
 DECL_RITEST( ParseUtil );
+DECL_RITEST( ImageConversions );
 
 #undef DECL_RITEST
 
 /* --- Main tests --- */
 
-#define DECL_TEST(NAME) \
-    TestResult Test##NAME(unsigned frame)
+#ifndef DECL_TEST
+#   ifdef GATHER_KNOWN_TESTS
+#       define DECL_TEST(NAME) \
+            knownTests.push_back(#NAME)
+#   else
+    #   define DECL_TEST(NAME) \
+            TestResult Test##NAME(unsigned frame)
+#   endif
+#endif
 
 // Command buffer tests
 DECL_TEST( CommandBufferSubmit );
+DECL_TEST( CommandBufferEncode );
 DECL_TEST( CommandBufferSecondary );
 DECL_TEST( CommandBufferMultiThreading );
 
@@ -44,6 +62,9 @@ DECL_TEST( RenderTarget1Attachment );
 DECL_TEST( RenderTargetNAttachments );
 DECL_TEST( MipMaps );
 DECL_TEST( PipelineCaching );
+DECL_TEST( ShaderErrors );
+DECL_TEST( SamplerBuffer );
+DECL_TEST( NativeHandle );
 
 // Rendering tests
 DECL_TEST( DepthBuffer );
@@ -54,6 +75,16 @@ DECL_TEST( DualSourceBlending );
 DECL_TEST( TriangleStripCutOff );
 DECL_TEST( TextureViews );
 DECL_TEST( Uniforms );
+DECL_TEST( ShadowMapping );
+DECL_TEST( ViewportAndScissor );
+DECL_TEST( ResourceBinding );
+DECL_TEST( ResourceArrays );
+DECL_TEST( StreamOutput );
+DECL_TEST( ResourceCopy );
+DECL_TEST( CombinedTexSamplers );
+
+// C99 tests
+DECL_TEST( OffscreenC99 );
 
 #undef DECL_TEST
 

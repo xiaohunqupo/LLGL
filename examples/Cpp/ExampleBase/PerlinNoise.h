@@ -5,13 +5,12 @@
  * Licensed under the terms of the BSD 3-Clause license (see LICENSE.txt).
  */
 
-#ifndef LLGL_PERLIN_NOISE_H
-#define LLGL_PERLIN_NOISE_H
+#ifndef LLGLEXAMPLES_PERLIN_NOISE_H
+#define LLGLEXAMPLES_PERLIN_NOISE_H
 
 
 #include <cstddef>
 #include <cstdint>
-#include <array>
 #include <vector>
 #include <Gauss/Vector3.h>
 
@@ -60,8 +59,8 @@ class PerlinNoise
 
     private:
 
-        std::array<std::uint32_t, 512>  perm_;
-        std::array<Gs::Vector3f, 256>   grads_;
+        std::uint32_t   perm_[512];
+        Gs::Vector3f    grads_[256];
 
 };
 

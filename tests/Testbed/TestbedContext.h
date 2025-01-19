@@ -13,6 +13,7 @@
 #include <LLGL/Utils/VertexFormat.h>
 #include <LLGL/Utils/ColorRGBA.h>
 #include <LLGL/Utils/ColorRGB.h>
+#include <LLGL/Utils/Image.h>
 #include <Gauss/Matrix.h>
 #include <Gauss/Vector4.h>
 #include <vector>
@@ -39,12 +40,14 @@ class TestbedContext
 
         TestbedContext(const char* moduleName, int version, int argc, char* argv[]);
 
+        ~TestbedContext();
+
         // Runs all tests and returns the number of failed ones. If all succeeded, the return value is 0.
         unsigned RunAllTests();
 
     public:
 
-        static unsigned RunRendererIndependentTests();
+        static unsigned RunRendererIndependentTests(int argc, char* argv[]);
 
         static void PrintSeparator();
 
@@ -72,7 +75,23 @@ class TestbedContext
             LLGL::RenderTarget**                output
         );
 
+        TestResult CreateGraphicsPSO(
+            const LLGL::GraphicsPipelineDescriptor& desc,
+            const char*                             name,
+            LLGL::PipelineState**                   output
+        );
+
+        TestResult CreateComputePSO(
+            const LLGL::ComputePipelineDescriptor&  desc,
+            const char*                             name,
+            LLGL::PipelineState**                   output
+        );
+
+        // Returns true if the current renderer requires combined texture samplers (OpenGL only).
         bool HasCombinedSamplers() const;
+
+        // Returns true if the current renderer requires unique bindings slots (Vulkan only).
+        bool HasUniqueBindingSlots() const;
 
     protected:
 
@@ -87,6 +106,8 @@ class TestbedContext
         enum VertFmt
         {
             VertFmtStd = 0,
+            VertFmtColored,
+            VertFmtColoredSO,
             VertFmtUnprojected,
             VertFmtEmpty,
 
@@ -97,7 +118,6 @@ class TestbedContext
         {
             PipelineSolid,
             PipelineTextured,
-            PipelineDualSourceBlend,
 
             PipelineCount,
         };
@@ -106,14 +126,45 @@ class TestbedContext
         {
             VSSolid = 0,
             PSSolid,
+
             VSTextured,
             PSTextured,
+
             VSDynamic,
             PSDynamic,
+
             VSUnprojected,
             PSUnprojected,
+
             VSDualSourceBlend,
             PSDualSourceBlend,
+
+            VSShadowMap,
+            VSShadowedScene,
+            PSShadowedScene,
+
+            VSResourceArrays,
+            PSResourceArrays,
+
+            VSResourceBinding,
+            PSResourceBinding,
+            CSResourceBinding,
+
+            VSClear,
+            PSClear,
+
+            VSStreamOutput,
+            VSStreamOutputXfb,
+            HSStreamOutput,
+            DSStreamOutput,
+            DSStreamOutputXfb,
+            GSStreamOutputXfb,
+            PSStreamOutput,
+
+            VSCombinedSamplers,
+            PSCombinedSamplers,
+
+            CSSamplerBuffer,
 
             ShaderCount,
         };
@@ -124,6 +175,7 @@ class TestbedContext
             TextureGradient,
             TexturePaintingA_NPOT,  // NPOT texture 600x479
             TexturePaintingB,       // 512x512
+            TextureDetailMap,       // 256x256
 
             TextureCount,
         };
@@ -132,8 +184,10 @@ class TestbedContext
         {
             SamplerNearest = 0,
             SamplerNearestClamp,
+            SamplerNearestNoMips,
             SamplerLinear,
             SamplerLinearClamp,
+            SamplerLinearNoMips,
 
             SamplerCount,
         };
@@ -148,11 +202,33 @@ class TestbedContext
 
     protected:
 
+        struct Options
+        {
+            std::string                 outputDir;
+            bool                        verbose     = false;
+            bool                        pedantic    = false; // Ignore thresholds, always compare strictly against reference values
+            bool                        greedy      = false; // Continue testing on failure
+            bool                        sanityCheck = false; // This is 'very verbose' and dumps out all intermediate data on successful tests
+            bool                        showTiming  = false;
+            bool                        fastTest    = false; // Skip slow buffer/texture creations to speed up test run
+            LLGL::Extent2D              resolution;
+            std::vector<std::string>    selectedTests;
+
+            bool ContainsTest(const char* name) const;
+        };
+
         struct StandardVertex
         {
             float position[3];
             float normal[3];
             float texCoord[2];
+        };
+
+        struct ColoredVertex
+        {
+            float position[4];
+            float normal[3];
+            float color[3];
         };
 
         struct UnprojectedVertex
@@ -231,20 +307,13 @@ class TestbedContext
     protected:
 
         const std::string               moduleName;
-        const std::string               outputDir;
-        const bool                      verbose;
-        const bool                      pedantic;       // Ignore thresholds, always compare strictly against reference values
-        const bool                      greedy;         // Continue testing on failure
-        const bool                      sanityCheck;    // This is 'very verbose' and dumps out all intermediate data on successful tests
-        const bool                      showTiming;
-        const bool                      fastTest;       // Skip slow buffer/texture creations to speed up test run
-        const LLGL::Extent2D            resolution;
-        const std::vector<std::string>  selectedTests;
+        const Options                   opt;
 
         unsigned                        failures                = 0;
 
         LLGL::RenderingDebugger         debugger;
         LLGL::RenderSystemPtr           renderer;
+        LLGL::RendererInfo              rendererInfo;
         LLGL::RenderingCapabilities     caps;
         LLGL::SwapChain*                swapChain               = nullptr;
         LLGL::CommandBuffer*            cmdBuffer               = nullptr;
@@ -267,9 +336,16 @@ class TestbedContext
 
     private:
 
+        static Options ParseOptions(int argc, char* argv[]);
+
         static std::string FormatByteArray(const void* data, std::size_t size, std::size_t bytesPerGroup = 1, bool formatAsFloats = false);
 
         static double ToMillisecs(std::uint64_t t0, std::uint64_t t1);
+
+        static LLGL::Image LoadImageFromFile(const std::string& filename, bool verbose = false);
+        static void SaveImageToFile(const LLGL::Image& img, const std::string& filename, bool verbose = false);
+
+        static bool IsRGBA8ubInThreshold(const std::uint8_t lhs[4], const std::uint8_t rhs[4], int threshold = 1);
 
     private:
 
@@ -287,6 +363,8 @@ class TestbedContext
         void CreateModelCube(IndexedTriangleMeshBuffer& scene, IndexedTriangleMesh& outMesh);
         void CreateModelRect(IndexedTriangleMeshBuffer& scene, IndexedTriangleMesh& outMesh);
 
+        void ConvertToColoredVertexList(const IndexedTriangleMeshBuffer& scene, std::vector<ColoredVertex>& outVertices, const LLGL::ColorRGBAf& color = {});
+
         void CreateConstantBuffers();
 
         LLGL::Shader* LoadShaderFromFile(
@@ -295,7 +373,8 @@ class TestbedContext
             const char*                 entry       = nullptr,
             const char*                 profile     = nullptr,
             const LLGL::ShaderMacro*    defines     = nullptr,
-            VertFmt                     vertFmt     = VertFmtStd
+            VertFmt                     vertFmt     = VertFmtStd,
+            VertFmt                     vertOutFmt  = VertFmtCount
         );
 
         void SaveColorImage(const std::vector<LLGL::ColorRGBub>& image, const LLGL::Extent2D& extent, const std::string& name);
@@ -311,10 +390,20 @@ class TestbedContext
 
         void RecordTestResult(TestResult result, const char* name);
 
+        bool QueryResultsWithTimeout(
+            LLGL::QueryHeap&    queryHeap,
+            std::uint32_t       firstQuery,
+            std::uint32_t       numQueries,
+            void*               data,
+            std::size_t         dataSize
+        );
+
     private:
 
-        bool        loadingShadersFailed_ = false;
-        Histogram   histogram_;
+        bool                    loadingShadersFailed_ = false;
+        Histogram               histogram_;
+        LLGL::Report            report_;
+        LLGL::Log::LogHandle    reportHandle_;
 
 };
 

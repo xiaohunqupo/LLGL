@@ -27,14 +27,14 @@ class D3D12Device
 
         /* ----- Device creation ----- */
 
-        HRESULT CreateDXDevice(const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, IDXGIAdapter* adapter = nullptr);
+        HRESULT CreateDXDevice(const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, bool isDebugLayerEnabled, IDXGIAdapter* adapter = nullptr);
 
-        ComPtr<ID3D12CommandQueue>          CreateDXCommandQueue            (D3D12_COMMAND_LIST_TYPE type);
-        ComPtr<ID3D12CommandAllocator>      CreateDXCommandAllocator        (D3D12_COMMAND_LIST_TYPE type);
-        ComPtr<ID3D12GraphicsCommandList>   CreateDXCommandList             (D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* commandAllocator);
-        ComPtr<ID3D12PipelineState>         CreateDXGraphicsPipelineState   (const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc);
-        ComPtr<ID3D12PipelineState>         CreateDXComputePipelineState    (const D3D12_COMPUTE_PIPELINE_STATE_DESC& desc);
-        ComPtr<ID3D12QueryHeap>             CreateDXQueryHeap               (const D3D12_QUERY_HEAP_DESC& desc);
+        HRESULT ShareDXDevice(ID3D12Device* sharedD3DDevice);
+
+        ComPtr<ID3D12CommandQueue> CreateDXCommandQueue(D3D12_COMMAND_LIST_TYPE type);
+        ComPtr<ID3D12CommandAllocator> CreateDXCommandAllocator(D3D12_COMMAND_LIST_TYPE type);
+        ComPtr<ID3D12GraphicsCommandList> CreateDXCommandList(D3D12_COMMAND_LIST_TYPE type, ID3D12CommandAllocator* commandAllocator);
+        ComPtr<ID3D12QueryHeap> CreateDXQueryHeap(const D3D12_QUERY_HEAP_DESC& desc);
 
         /* ----- Data queries ----- */
 
@@ -58,28 +58,22 @@ class D3D12Device
             return featureLevel_;
         }
 
-        #ifdef LLGL_DEBUG
         // Returns the info queue of the debug layer.
         inline ID3D12InfoQueue* GetInfoQueue() const
         {
             return infoQueue_.Get();
         }
-        #endif
 
     private:
 
-        #ifdef LLGL_DEBUG
         void DenyLowSeverityWarnings();
-        #endif
 
     private:
 
         ComPtr<ID3D12Device>    device_;
         D3D_FEATURE_LEVEL       featureLevel_   = D3D_FEATURE_LEVEL_9_1;
 
-        #ifdef LLGL_DEBUG
         ComPtr<ID3D12InfoQueue> infoQueue_;
-        #endif
 
 };
 

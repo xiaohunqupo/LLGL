@@ -30,14 +30,20 @@ namespace LLGL
 // Returns the DLL instance handle of this module.
 HINSTANCE DXGetDllHandle();
 
-// Throws an std::runtime_error exception if 'hr' is not S_OK.
-void DXThrowIfFailed(const HRESULT hr, const char* info);
+// Returns a string representation for the specified HRESULT error code.
+const char* DXErrorToStrOrHex(HRESULT hr);
 
-// Throws an std::runtime_error exception if 'hr' is not S_OK, with an info about the failed interface creation.
-void DXThrowIfCreateFailed(const HRESULT hr, const char* interfaceName, const char* contextInfo = nullptr);
+// Traps the runtime if 'hr' is not S_OK.
+void DXThrowIfFailed(HRESULT hr, const char* info);
 
-// Throws an std::runtime_error exception if 'hr' is not S_OK, with an info about the failed function call.
-void DXThrowIfInvocationFailed(const HRESULT hr, const char* funcName, const char* contextInfo = nullptr);
+// Traps the runtime if 'hr' is not S_OK, with an info about the failed type cast from a COM pointer.
+void DXThrowIfCastFailed(HRESULT hr, const char* interfaceName, const char* contextInfo = nullptr);
+
+// Traps the runtime if 'hr' is not S_OK, with an info about the failed interface creation.
+void DXThrowIfCreateFailed(HRESULT hr, const char* interfaceName, const char* contextInfo = nullptr);
+
+// Traps the runtime if 'hr' is not S_OK, with an info about the failed function call.
+void DXThrowIfInvocationFailed(HRESULT hr, const char* funcName, const char* contextInfo = nullptr);
 
 // Returns the specified value as a DirectX BOOL type.
 BOOL DXBoolean(bool value);
@@ -57,20 +63,14 @@ ComPtr<ID3DBlob> DXCreateBlob(const std::vector<char>& data);
 // Returns a blob that was created from a resource (*.rc files).
 ComPtr<ID3DBlob> DXCreateBlobFromResource(int resourceID);
 
-// Returns the rendering capabilites of the specified Direct3D feature level.
-void DXGetRenderingCaps(RenderingCapabilities& caps, D3D_FEATURE_LEVEL featureLevel);
-
-// Returns the list of all supported Direct3D feature levels.
-std::vector<D3D_FEATURE_LEVEL> DXGetFeatureLevels(D3D_FEATURE_LEVEL maxFeatureLevel);
-
-// Returns the specified feature level as version string.
-const char* DXFeatureLevelToVersion(D3D_FEATURE_LEVEL featureLevel);
-
-// Returns the specified feature level as HLSL shader model version string.
-const char* DXFeatureLevelToShaderModel(D3D_FEATURE_LEVEL featureLevel);
+// Returns the default list of supported D3D texture formats.
+void DXGetDefaultSupportedTextureFormats(Format* outFormats, std::size_t* outNumFormats);
 
 // Returns the compiler flags for the 'ShaderCompileFlags' enumeration values for the DirectX Effects Compiler (FXC).
 UINT DXGetFxcCompilerFlags(int flags);
+
+// Converts the adapter descriptor to video adapter information.
+void DXConvertVideoAdapterInfo(IDXGIAdapter* adapter, const DXGI_ADAPTER_DESC& inDesc, VideoAdapterInfo& outInfo);
 
 // Returns the video adapter descriptor from the specified DXGI adapter.
 VideoAdapterInfo DXGetVideoAdapterInfo(IDXGIFactory* factory, long preferredAdapterFlags = 0, IDXGIAdapter** outPreferredAdatper = nullptr);
@@ -80,6 +80,9 @@ Format DXGetSignatureParameterType(D3D_REGISTER_COMPONENT_TYPE componentType, BY
 
 // Returns a suitable DXGI format for the specified depth-stencil mode.
 DXGI_FORMAT DXPickDepthStencilFormat(int depthBits, int stencilBits);
+
+// Returns true if the specified DXGI swap-chain is in fullscreen mode.
+bool DXGetFullscreenState(IDXGISwapChain* swapChain);
 
 
 } // /namespace LLGL

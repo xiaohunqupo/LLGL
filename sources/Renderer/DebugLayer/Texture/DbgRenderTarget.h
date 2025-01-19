@@ -30,11 +30,11 @@ class DbgRenderTarget final : public RenderTarget
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
-        DbgRenderTarget(RenderTarget& instance, RenderingDebugger* debugger, const RenderTargetDescriptor& desc);
+        DbgRenderTarget(RenderTarget& instance, const RenderTargetDescriptor& desc);
 
     public:
 

@@ -9,15 +9,38 @@
 #include <LLGL/Utils/Parse.h>
 
 
+/*
+Renders a fullscreen triangle directly to the swap-chain, i.e. only a single color attachment but the shader has two outputs.
+This requires the dual-source blending feature, which is denoted as "Src1" in the blend states.
+
+The shading-languages have different semantics to describe the respective blending outputs:
+- HLSL uses the same semantic as if two color attachments where active:
+    float4 colorA : SV_Target0;
+    float4 colorB : SV_Target1;
+- GLSL uses the same output location but with two different indices:
+    layout(location = 0, index = 0) out vec4 colorA;
+    layout(location = 0, index = 1) out vec4 colorB;
+- Metal uses a similar semantic as GLSL:
+    float4 colorA [[color(0), index(0)]];
+    float4 colorB [[color(0), index(1)]];
+*/
 DEF_TEST( DualSourceBlending )
 {
     if (shaders[VSDualSourceBlend] == nullptr || shaders[PSDualSourceBlend] == nullptr)
         return TestResult::Skipped;
 
     // Create all blend states
+    PipelineLayout* psoLayout = renderer->CreatePipelineLayout(
+        Parse(
+            HasCombinedSamplers()
+                ?   "texture(colorMapA@1,colorMapB@2):frag,sampler(1,2):frag"
+                :   "texture(colorMapA@1,colorMapB@2):frag,sampler(3,4):frag"
+        )
+    );
+
     GraphicsPipelineDescriptor psoDesc;
     {
-        psoDesc.pipelineLayout                  = layouts[PipelineDualSourceBlend];
+        psoDesc.pipelineLayout                  = psoLayout;
         psoDesc.renderPass                      = swapChain->GetRenderPass();
         psoDesc.vertexShader                    = shaders[VSDualSourceBlend];
         psoDesc.fragmentShader                  = shaders[PSDualSourceBlend];
@@ -27,7 +50,7 @@ DEF_TEST( DualSourceBlending )
         psoDesc.blend.targets[0].srcAlpha       = BlendOp::One;
         psoDesc.blend.targets[0].dstAlpha       = BlendOp::Src1Alpha;
     }
-    PipelineState* pso = renderer->CreatePipelineState(psoDesc);
+    CREATE_GRAPHICS_PSO(pso, psoDesc, "psoDualSourceBlend");
 
     Sampler* samplerA = renderer->CreateSampler(Parse("filter=linear"));
     Sampler* samplerB = renderer->CreateSampler(Parse("filter=linear")); // <-- Also linear filtering or CIS tests may fail (due to one-off pixels)
@@ -54,7 +77,7 @@ DEF_TEST( DualSourceBlending )
             cmdBuffer->Draw(3, 0);
 
             // Capture framebuffer
-            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
         }
         cmdBuffer->EndRenderPass();
     }
@@ -72,6 +95,7 @@ DEF_TEST( DualSourceBlending )
     renderer->Release(*samplerA);
     renderer->Release(*samplerB);
     renderer->Release(*pso);
+    renderer->Release(*psoLayout);
 
     return diff.Evaluate("dual source blending");
 }

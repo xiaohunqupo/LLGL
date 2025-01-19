@@ -25,9 +25,10 @@ namespace LLGL
             }
         }
 
-        internal CommandBuffer(NativeLLGL.CommandBuffer native)
+        internal CommandBuffer(NativeLLGL.CommandBuffer native, string debugName = null)
         {
             Native = native;
+            InitializeDebugName(debugName);
         }
 
         ~CommandBuffer()
@@ -45,9 +46,9 @@ namespace LLGL
             NativeLLGL.End();
         }
 
-        public void Execute(CommandBuffer deferredCommandBuffer)
+        public void Execute(CommandBuffer secondaryCommandBuffer)
         {
-            NativeLLGL.Execute(deferredCommandBuffer.Native);
+            NativeLLGL.Execute(secondaryCommandBuffer.Native);
         }
 
         public void UpdateBuffer(Buffer dstBuffer, long dstOffset, byte[] data)
@@ -168,6 +169,7 @@ namespace LLGL
             NativeLLGL.SetResource(descriptor, resource.NativeBase);
         }
 
+        [Obsolete("LLGL.CommandBuffer.ResetResourceSlots is deprecated since 0.04b; No need to reset resource slots manually anymore!")]
         public void ResetResourceSlots(ResourceType resourceType, int firstSlot, int numSlots, BindFlags bindFlags, StageFlags stageFlags)
         {
             NativeLLGL.ResetResourceSlots(resourceType, firstSlot, numSlots, (int)bindFlags, (int)stageFlags);
@@ -352,6 +354,11 @@ namespace LLGL
         public void DrawIndexedIndirect(Buffer buffer, long offset, int numCommands, int stride)
         {
             NativeLLGL.DrawIndexedIndirectExt(buffer.Native, offset, numCommands, stride);
+        }
+
+        public void DrawStreamOutput()
+        {
+            NativeLLGL.DrawStreamOutput();
         }
 
         public void Dispatch(int numWorkGroupsX, int numWorkGroupsY, int numWorkGroupsZ)

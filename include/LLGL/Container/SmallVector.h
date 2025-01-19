@@ -395,7 +395,8 @@ class LLGL_EXPORT SmallVector
             if (size_ > 0)
             {
                 --size_;
-                Allocator{}.destroy(end());
+                Allocator alloc;
+                std::allocator_traits<Allocator>::destroy(alloc, end());
             }
         }
 
@@ -462,7 +463,7 @@ class LLGL_EXPORT SmallVector
                 {
                     /* Destroy range, move tail backwards, and reduce container size */
                     destroy_range(const_cast<iterator>(from), const_cast<iterator>(to));
-                    move_tail(const_cast<iterator>(from), to, end());
+                    move_tail(const_cast<iterator>(from), const_cast<iterator>(to), end());
                     size_ -= count;
                     return const_cast<iterator>(to);
                 }
@@ -719,7 +720,7 @@ class LLGL_EXPORT SmallVector
 
         void realloc(size_type cap = 0)
         {
-            cap = (std::max)(cap, size_);
+            cap = std::max<size_type>(cap, size_);
 
             if (cap > LocalCapacity)
             {

@@ -22,7 +22,7 @@ A texture view of BGRA with swizzling BGRA should cancel each other out and resu
 DEF_TEST( TextureViews )
 {
     // Skip if texture swizzling is not supported
-    if (!renderer->GetRenderingCaps().features.hasTextureViewSwizzle)
+    if (!caps.features.hasTextureViewSwizzle)
         return TestResult::Skipped;
 
     if (shaders[VSTextured] == nullptr || shaders[PSTextured] == nullptr)
@@ -53,7 +53,7 @@ DEF_TEST( TextureViews )
         psoDesc.fragmentShader                  = shaders[PSTextured];
         psoDesc.blend.targets[0].blendEnabled   = true;
     }
-    PipelineState* pso = renderer->CreatePipelineState(psoDesc);
+    CREATE_GRAPHICS_PSO(pso, psoDesc, "psoTexViews");
 
     // D3D does not support reinterpretation of texture view formats, i.e. RGBA8 cannot be reinterpreted to RG16, but Vulkan, GL, and Metal support it.
     const bool isTextureFormatReinterpretationSupported = renderer->GetRenderingCaps().features.hasTextureViewFormatSwizzle;
@@ -103,8 +103,8 @@ DEF_TEST( TextureViews )
     // Initialize viepwort to fit all blend state scenes into a single window
     Viewport viewport;
     {
-        viewport.width  = static_cast<float>(resolution.width ) / static_cast<float>(numViewConfigsSqrt);
-        viewport.height = static_cast<float>(resolution.height) / static_cast<float>(numViewConfigsSqrt);
+        viewport.width  = static_cast<float>(opt.resolution.width ) / static_cast<float>(numViewConfigsSqrt);
+        viewport.height = static_cast<float>(opt.resolution.height) / static_cast<float>(numViewConfigsSqrt);
     }
 
     // Render scene
@@ -150,7 +150,7 @@ DEF_TEST( TextureViews )
             }
 
             // Capture framebuffer
-            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
         }
         cmdBuffer->EndRenderPass();
     }

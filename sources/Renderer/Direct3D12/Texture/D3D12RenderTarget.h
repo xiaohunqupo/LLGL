@@ -34,7 +34,7 @@ class D3D12RenderTarget final : public RenderTarget
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
@@ -77,7 +77,8 @@ class D3D12RenderTarget final : public RenderTarget
         void CreateDepthStencilAttachment(
             ID3D12Device*                   device,
             const AttachmentDescriptor&     depthStenciAttachment,
-            D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle
+            D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
+            D3D12_DSV_FLAGS                 dsvFlags                = D3D12_DSV_FLAG_NONE
         );
 
         D3D12Resource* CreateInternalTexture(
@@ -104,7 +105,8 @@ class D3D12RenderTarget final : public RenderTarget
             DXGI_FORMAT         format,
             const TextureType   type,
             UINT                mipLevel,
-            UINT                arrayLayer
+            UINT                arrayLayer,
+            D3D12_DSV_FLAGS     dsvFlags    = D3D12_DSV_FLAG_NONE
         );
 
         void CreateResolveTarget(

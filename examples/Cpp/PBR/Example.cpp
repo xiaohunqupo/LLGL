@@ -6,8 +6,7 @@
  */
 
 #include <ExampleBase.h>
-#include <FileUtils.h>
-#include <stb/stb_image.h>
+#include <ImageReader.h>
 
 
 class Example_PBR : public ExampleBase
@@ -81,7 +80,7 @@ public:
         CreateResourceHeaps();
 
         // Print some information on the standard output
-        std::cout << "press TAB KEY to switch between five different texture samplers" << std::endl;
+        LLGL::Log::Printf("press TAB KEY to switch between five different texture samplers\n");
     }
 
 private:
@@ -118,13 +117,21 @@ private:
             shaderPipelineMeshes.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.hlsl", "VMesh", "vs_5_0" }, { vertexFormat });
             shaderPipelineMeshes.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.hlsl", "PMesh", "ps_5_0" });
         }
-        else if (Supported(LLGL::ShadingLanguage::GLSL))
+        else if (Supported(LLGL::ShadingLanguage::GLSL) || Supported(LLGL::ShadingLanguage::ESSL))
         {
             shaderPipelineSky.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.Sky.vert" });
             shaderPipelineSky.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.Sky.frag" });
 
             shaderPipelineMeshes.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.Mesh.vert" }, { vertexFormat });
             shaderPipelineMeshes.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.Mesh.frag" });
+        }
+        else if (Supported(LLGL::ShadingLanguage::SPIRV))
+        {
+            shaderPipelineSky.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.Sky.450core.vert.spv" });
+            shaderPipelineSky.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.Sky.450core.frag.spv" });
+
+            shaderPipelineMeshes.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.Mesh.450core.vert.spv" }, { vertexFormat });
+            shaderPipelineMeshes.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.Mesh.450core.frag.spv" });
         }
         else if (Supported(LLGL::ShadingLanguage::Metal))
         {
@@ -141,34 +148,21 @@ private:
     void CreatePipelines()
     {
         // Create pipeline layout for skybox
-        if (IsOpenGL())
-        {
-            layoutSky = renderer->CreatePipelineLayout(
-                LLGL::Parse(
-                    "heap{"
-                    "cbuffer(Settings@1):frag:vert,"
-                    "sampler(skyBox@2):frag,"
-                    "texture(2):frag,"
-                    "}"
-                )
-            );
-        }
-        else
-        {
-            layoutSky = renderer->CreatePipelineLayout(
-                LLGL::Parse(
-                    "heap{"
-                    "cbuffer(1):frag:vert,"
-                    "sampler(2):frag,"
-                    "texture(3):frag,"
-                    "}"
-                )
-            );
-        }
+        layoutSky = renderer->CreatePipelineLayout(
+            LLGL::Parse(
+                "heap{"
+                "  cbuffer(Settings@1):frag:vert,"
+                "  sampler(smpl@2):frag,"
+                "  texture(skyBox@3):frag,"
+                "},"
+                "sampler<skyBox, smpl>(skyBox@3),"
+            )
+        );
 
         // Create graphics pipeline for skybox
         LLGL::GraphicsPipelineDescriptor pipelineDescSky;
         {
+            pipelineDescSky.debugName                       = "Sky.PSO";
             pipelineDescSky.vertexShader                    = shaderPipelineSky.vs;
             pipelineDescSky.fragmentShader                  = shaderPipelineSky.ps;
             pipelineDescSky.pipelineLayout                  = layoutSky;
@@ -179,77 +173,69 @@ private:
         pipelineSky = renderer->CreatePipelineState(pipelineDescSky);
 
         // Create pipeline layout for meshes
-        if (IsOpenGL())
-        {
-            layoutMeshes = renderer->CreatePipelineLayout(
-                LLGL::Parse(
-                    "heap{"
-                    "  cbuffer(Settings@1):frag:vert,"
-                    "  sampler(skyBox@2, colorMaps@3, normalMaps@4, roughnessMaps@5, metallicMaps@6):frag,"
-                    "  texture(2,3,4,5,6):frag,"
-                    "}"
-                )
-            );
-        }
-        else
-        {
-            layoutMeshes = renderer->CreatePipelineLayout(
-                LLGL::Parse(
-                    "heap{"
-                    "  cbuffer(1):frag:vert,"
-                    "  sampler(2):frag,"
-                    "  texture(3,4,5,6,7):frag,"
-                    "}"
-                )
-            );
-        }
+        layoutMeshes = renderer->CreatePipelineLayout(
+            LLGL::Parse(
+                "heap{"
+                "  cbuffer(Settings@1):frag:vert,"
+                "  sampler(smpl@2):frag,"
+                "  texture(skyBox@3, colorMaps@4, normalMaps@5, roughnessMaps@6, metallicMaps@7):frag,"
+                "},"
+                "sampler<skyBox, smpl>(skyBox@3),"
+                "sampler<colorMaps, smpl>(colorMaps@4),"
+                "sampler<normalMaps, smpl>(normalMaps@5),"
+                "sampler<roughnessMaps, smpl>(roughnessMaps@6),"
+                "sampler<metallicMaps, smpl>(metallicMaps@7),"
+            )
+        );
 
         // Create graphics pipeline for meshes
         LLGL::GraphicsPipelineDescriptor pipelineDescMeshes;
         {
+            pipelineDescMeshes.debugName                        = "Mesh.PSO";
             pipelineDescMeshes.vertexShader                     = shaderPipelineMeshes.vs;
             pipelineDescMeshes.fragmentShader                   = shaderPipelineMeshes.ps;
             pipelineDescMeshes.pipelineLayout                   = layoutMeshes;
             pipelineDescMeshes.depth.testEnabled                = true;
             pipelineDescMeshes.depth.writeEnabled               = true;
+            pipelineDescMeshes.rasterizer.cullMode              = LLGL::CullMode::Back;
             pipelineDescMeshes.rasterizer.multiSampleEnabled    = (GetSampleCount() > 1);
         }
         pipelineMeshes = renderer->CreatePipelineState(pipelineDescMeshes);
     }
 
-    void LoadImage(const std::string& filename, int& texWidth, int& texHeight, std::vector<std::uint8_t>& imageData)
+    bool LoadImageSlice(const std::string& filename, std::uint32_t& texWidth, std::uint32_t& texHeight, std::vector<std::uint8_t>& imageData)
     {
         // Print information about current texture
-        const std::string path = FindResourcePath(filename);
-        std::cout << "load image: \"" << path << "\"" << std::endl;
+        LLGL::Log::Printf("load image: \"%s\"\n", filename.c_str());
 
         // Load image data from file (using STBI library, see http://nothings.org/stb_image.h)
-        int w = 0, h = 0, n = 0;
-        unsigned char* buf = stbi_load(path.c_str(), &w, &h, &n, 4);
-        if (!buf)
-            throw std::runtime_error("failed to load image: \"" + filename + "\"");
+        ImageReader imageReader;
+        imageReader.LoadFromFile(filename);
 
         // Check if image size is compatible
+        const LLGL::Extent3D& imageExtent = imageReader.GetTextureDesc().extent;
         if (texWidth == 0)
         {
-            texWidth    = w;
-            texHeight   = h;
+            texWidth    = imageExtent.width;
+            texHeight   = imageExtent.height;
         }
-        else if (w != texWidth || h != texHeight)
-            throw std::runtime_error("size mismatch for texture array while loading image: \"" + filename + "\"");
+        else if (imageExtent.width != texWidth || imageExtent.height != texHeight)
+        {
+            LLGL::Log::Errorf("size mismatch for texture array while loading image: \"%s\"", filename.c_str());
+            return false;
+        }
 
         // Copy into array
-        auto offset = imageData.size();
-        auto bufSize = static_cast<std::size_t>(w*h*4);
+        auto offset  = imageData.size();
+        auto bufSize = imageReader.GetImageView().dataSize;
 
         imageData.resize(offset + bufSize);
-        ::memcpy(&(imageData[offset]), buf, bufSize);
+        ::memcpy(&(imageData[offset]), imageReader.GetImageView().data, bufSize);
 
-        // Release image data
-        stbi_image_free(buf);
+        return true;
     }
 
-    void FillImage(int& texWidth, int& texHeight, std::vector<std::uint8_t>& imageData)
+    void FillImageSlice(std::uint32_t& texWidth, std::uint32_t& texHeight, std::vector<std::uint8_t>& imageData)
     {
         // Initialize texture size with default value if necessary
         if (texWidth == 0)
@@ -269,15 +255,22 @@ private:
     LLGL::Texture* LoadTextureArray(const LLGL::TextureType texType, const std::initializer_list<std::string>& texFilenames)
     {
         // Load image data
-        int texWidth = 0, texHeight = 0;
+        std::uint32_t texWidth = 0, texHeight = 0;
         std::vector<std::uint8_t> imageData;
+        std::uint32_t numImageSlices = 0;
 
-        for (auto filename : texFilenames)
+        for (const std::string& filename : texFilenames)
         {
             if (filename.empty())
-                FillImage(texWidth, texHeight, imageData);
+            {
+                FillImageSlice(texWidth, texHeight, imageData);
+                ++numImageSlices;
+            }
             else
-                LoadImage("PBR/" + filename, texWidth, texHeight, imageData);
+            {
+                if (LoadImageSlice("PBR/" + filename, texWidth, texHeight, imageData))
+                    ++numImageSlices;
+            }
         }
 
         // Define initial texture data
@@ -297,7 +290,7 @@ private:
             texDesc.extent.width    = static_cast<std::uint32_t>(texWidth);
             texDesc.extent.height   = static_cast<std::uint32_t>(texHeight);
             texDesc.extent.depth    = 1;
-            texDesc.arrayLayers     = static_cast<std::uint32_t>(texFilenames.size());
+            texDesc.arrayLayers     = numImageSlices;
         }
         auto tex = renderer->CreateTexture(texDesc, &srcImageView);
 
@@ -309,7 +302,7 @@ private:
         numSkyboxes = 1;
         numMaterials = 4;
 
-        // Load skybox texutres
+        // Load skybox textures
         skyboxArray = LoadTextureArray(
             LLGL::TextureType::TextureCubeArray,
             {
@@ -383,42 +376,21 @@ private:
             constantBuffer, linearSampler, skyboxArray
         };
         resourceHeapSkybox = renderer->CreateResourceHeap(layoutSky, resourceViewsSky);
-        resourceHeapSkybox->SetName("resourceHeapSkybox");
+        resourceHeapSkybox->SetDebugName("resourceHeapSkybox");
 
         // Create resource heap for meshes
-        std::vector<LLGL::ResourceViewDescriptor> resourceViewsMeshes;
-        if (IsOpenGL())
+        std::vector<LLGL::ResourceViewDescriptor> resourceViewsMeshes =
         {
-            resourceViewsMeshes =
-            {
-                constantBuffer,
-                linearSampler,
-                linearSampler,
-                linearSampler,
-                linearSampler,
-                linearSampler,
-                skyboxArray,
-                colorMapArray,
-                normalMapArray,
-                roughnessMapArray,
-                metallicMapArray,
-            };
-        }
-        else
-        {
-            resourceViewsMeshes =
-            {
-                constantBuffer,
-                linearSampler,
-                skyboxArray,
-                colorMapArray,
-                normalMapArray,
-                roughnessMapArray,
-                metallicMapArray,
-            };
-        }
+            constantBuffer,
+            linearSampler,
+            skyboxArray,
+            colorMapArray,
+            normalMapArray,
+            roughnessMapArray,
+            metallicMapArray,
+        };
         resourceHeapMeshes = renderer->CreateResourceHeap(layoutMeshes, resourceViewsMeshes);
-        resourceHeapMeshes->SetName("resourceHeapMeshes");
+        resourceHeapMeshes->SetDebugName("resourceHeapMeshes");
     }
 
 private:

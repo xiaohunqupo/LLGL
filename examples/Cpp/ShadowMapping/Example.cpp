@@ -63,24 +63,13 @@ public:
         CreatePipelines();
         CreateResourceHeaps();
 
-        // Label objects for debugging
-        swapChain->SetName("BackBuffer");
-
-        vertexBuffer->SetName("Buffer.Vertices");
-        constantBuffer->SetName("Buffer.Constants");
-
-        vsShadowMap->SetName("ShadowMap.VertexShader");
-        vsScene->SetName("Scene.VertexShader");
-        fsScene->SetName("Scene.FragmentShader");
-
-        shadowMap->SetName("ShadowMap.Texture");
-        shadowMapRenderTarget->SetName("ShadowMap.RenderTarget");
-
         #if 0
         // Show some information
-        std::cout << "press LEFT MOUSE BUTTON and move the mouse on the X-axis to rotate the OUTER cube" << std::endl;
-        std::cout << "press RIGHT MOUSE BUTTON and move the mouse on the X-axis to rotate the INNER cube" << std::endl;
-        std::cout << "press RETURN KEY to save the render target texture to a PNG file" << std::endl;
+        LLGL::Log::Printf(
+            "press LEFT MOUSE BUTTON and move the mouse on the X-axis to rotate the OUTER cube\n"
+            "press RIGHT MOUSE BUTTON and move the mouse on the X-axis to rotate the INNER cube\n"
+            "press RETURN KEY to save the render target texture to a PNG file\n"
+        );
         #endif
     }
 
@@ -111,7 +100,7 @@ private:
     void LoadShaders(const LLGL::VertexFormat& vertexFormat)
     {
         // Load shader program
-        if (Supported(LLGL::ShadingLanguage::GLSL))
+        if (Supported(LLGL::ShadingLanguage::GLSL) || Supported(LLGL::ShadingLanguage::ESSL))
         {
             vsShadowMap = LoadShaderAndPatchClippingOrigin({ LLGL::ShaderType::Vertex, "ShadowMap.vert" }, { vertexFormat });
 
@@ -148,18 +137,21 @@ private:
         // Create texture
         LLGL::TextureDescriptor textureDesc;
         {
+            textureDesc.debugName       = "ShadowMap.Texture";
             textureDesc.type            = LLGL::TextureType::Texture2D;
             textureDesc.bindFlags       = LLGL::BindFlags::DepthStencilAttachment | LLGL::BindFlags::Sampled;
             textureDesc.format          = LLGL::Format::D32Float;
             textureDesc.extent.width    = shadowMapResolution.width;
             textureDesc.extent.height   = shadowMapResolution.height;
             textureDesc.extent.depth    = 1;
+            textureDesc.mipLevels       = 1;
         }
         shadowMap = renderer->CreateTexture(textureDesc);
 
         // Create render target
         LLGL::RenderTargetDescriptor renderTargetDesc;
         {
+            renderTargetDesc.debugName              = "ShadowMap.RenderTarget";
             renderTargetDesc.resolution             = shadowMapResolution;
             renderTargetDesc.depthStencilAttachment = shadowMap;
         }
@@ -171,13 +163,24 @@ private:
         // Initialize shadow-map sampler
         LLGL::SamplerDescriptor shadowSamplerDesc;
         {
-            shadowSamplerDesc.addressModeU      = LLGL::SamplerAddressMode::Border;
-            shadowSamplerDesc.addressModeV      = LLGL::SamplerAddressMode::Border;
-            shadowSamplerDesc.addressModeW      = LLGL::SamplerAddressMode::Border;
-            shadowSamplerDesc.borderColor[0]    = 1.0f;
-            shadowSamplerDesc.borderColor[1]    = 1.0f;
-            shadowSamplerDesc.borderColor[2]    = 1.0f;
-            shadowSamplerDesc.borderColor[3]    = 1.0f;
+            // Clamp-to-border sampler address mode requires GLES 3.2, so use standard clamp mode in case hardware only supports GLES 3.0
+            if (renderer->GetRendererID() == LLGL::RendererID::OpenGLES ||
+                renderer->GetRendererID() == LLGL::RendererID::WebGL)
+            {
+                shadowSamplerDesc.addressModeU      = LLGL::SamplerAddressMode::Clamp;
+                shadowSamplerDesc.addressModeV      = LLGL::SamplerAddressMode::Clamp;
+                shadowSamplerDesc.addressModeW      = LLGL::SamplerAddressMode::Clamp;
+            }
+            else
+            {
+                shadowSamplerDesc.addressModeU      = LLGL::SamplerAddressMode::Border;
+                shadowSamplerDesc.addressModeV      = LLGL::SamplerAddressMode::Border;
+                shadowSamplerDesc.addressModeW      = LLGL::SamplerAddressMode::Border;
+                shadowSamplerDesc.borderColor[0]    = 1.0f;
+                shadowSamplerDesc.borderColor[1]    = 1.0f;
+                shadowSamplerDesc.borderColor[2]    = 1.0f;
+                shadowSamplerDesc.borderColor[3]    = 1.0f;
+            }
             shadowSamplerDesc.compareEnabled    = true;
             shadowSamplerDesc.mipMapEnabled     = false;
         }
@@ -187,7 +190,7 @@ private:
         {
             shadowLayoutDesc.heapBindings =
             {
-                LLGL::BindingDescriptor{ LLGL::ResourceType::Buffer, LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::VertexStage, (IsOpenGL() ? 0u : 1u) }
+                LLGL::BindingDescriptor{ "Settings", LLGL::ResourceType::Buffer, LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::VertexStage, 1 },
             };
         }
         pipelineLayoutShadowMap = renderer->CreatePipelineLayout(shadowLayoutDesc);
@@ -197,15 +200,16 @@ private:
         {
             sceneLayoutDesc.heapBindings =
             {
-                LLGL::BindingDescriptor{ LLGL::ResourceType::Buffer,  LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::FragmentStage | LLGL::StageFlags::VertexStage, (IsOpenGL() ? 0u : 1u) },
-                LLGL::BindingDescriptor{ LLGL::ResourceType::Texture, LLGL::BindFlags::Sampled,        LLGL::StageFlags::FragmentStage,                                 (IsOpenGL() ? 0u : 2u) },
+                LLGL::BindingDescriptor{ "Settings",  LLGL::ResourceType::Buffer,  LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::FragmentStage | LLGL::StageFlags::VertexStage, 1 },
+                LLGL::BindingDescriptor{ "shadowMap", LLGL::ResourceType::Texture, LLGL::BindFlags::Sampled,        LLGL::StageFlags::FragmentStage,                                 2 },
             };
             sceneLayoutDesc.staticSamplers =
             {
-                LLGL::StaticSamplerDescriptor
-                {
-                    LLGL::StageFlags::FragmentStage, (IsOpenGL() ? 0u : 3u), shadowSamplerDesc
-                }
+                LLGL::StaticSamplerDescriptor{ "shadowMapSampler", LLGL::StageFlags::FragmentStage, 3, shadowSamplerDesc }
+            };
+            sceneLayoutDesc.combinedTextureSamplers =
+            {
+                LLGL::CombinedTextureSamplerDescriptor{ "shadowMap", "shadowMap", "shadowMapSampler", 2 }
             };
         }
         pipelineLayoutScene = renderer->CreatePipelineLayout(sceneLayoutDesc);
@@ -224,11 +228,12 @@ private:
                 pipelineDesc.depth.writeEnabled                     = true;
                 pipelineDesc.rasterizer.cullMode                    = LLGL::CullMode::Back;
                 pipelineDesc.rasterizer.depthBias.constantFactor    = 4.0f;
-                pipelineDesc.rasterizer.depthBias.slopeFactor       = 4.0f;
+                pipelineDesc.rasterizer.depthBias.slopeFactor       = 1.5f;
                 pipelineDesc.blend.targets[0].colorMask             = 0x0;
                 pipelineDesc.viewports                              = { shadowMapResolution };
             }
             pipelineShadowMap = renderer->CreatePipelineState(pipelineDesc);
+            ReportPSOErrors(pipelineShadowMap);
         }
 
         // Create graphics pipeline for scene rendering
@@ -245,6 +250,7 @@ private:
                 pipelineDesc.rasterizer.multiSampleEnabled  = (GetSampleCount() > 1);
             }
             pipelineScene = renderer->CreatePipelineState(pipelineDesc);
+            ReportPSOErrors(pipelineScene);
         }
     }
 
@@ -354,9 +360,6 @@ private:
         {
             // Bind common input assembly
             commands->SetVertexBuffer(*vertexBuffer);
-
-            // Unbind shadow texture before rendering into it
-            commands->ResetResourceSlots(LLGL::ResourceType::Texture, 2, 1, LLGL::BindFlags::Sampled, LLGL::StageFlags::FragmentStage);
 
             // Draw scene into shadow-map, then draw scene onto screen
             commands->PushDebugGroup("Shadow Map Pass");

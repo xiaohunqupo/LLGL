@@ -8,6 +8,8 @@
 #include "VKDeviceBuffer.h"
 #include "../Memory/VKDeviceMemoryManager.h"
 #include "../VKCore.h"
+#include "../../../Core/PrintfUtils.h"
+#include "../../../Core/Assertion.h"
 #include <algorithm>
 
 
@@ -39,7 +41,7 @@ VKDeviceBuffer::VKDeviceBuffer(
     CreateVkBufferAndMemoryRegion(device, createInfo, deviceMemoryMngr, memoryProperties);
 }
 
-VKDeviceBuffer::VKDeviceBuffer(VKDeviceBuffer&& rhs) :
+VKDeviceBuffer::VKDeviceBuffer(VKDeviceBuffer&& rhs) noexcept :
     buffer_       { std::move(rhs.buffer_) },
     requirements_ { rhs.requirements_      },
     memoryRegion_ { rhs.memoryRegion_      }
@@ -47,7 +49,7 @@ VKDeviceBuffer::VKDeviceBuffer(VKDeviceBuffer&& rhs) :
     rhs.memoryRegion_ = nullptr;
 }
 
-VKDeviceBuffer& VKDeviceBuffer::operator = (VKDeviceBuffer&& rhs)
+VKDeviceBuffer& VKDeviceBuffer::operator = (VKDeviceBuffer&& rhs) noexcept
 {
     buffer_             = std::move(rhs.buffer_);
     requirements_       = rhs.requirements_;
@@ -61,7 +63,7 @@ VKDeviceBuffer& VKDeviceBuffer::operator = (VKDeviceBuffer&& rhs)
 void VKDeviceBuffer::CreateVkBuffer(VkDevice device, const VkBufferCreateInfo& createInfo)
 {
     /* Create Vulkan buffer object and query memory requirements */
-    auto result = vkCreateBuffer(device, &createInfo, nullptr, buffer_.ReleaseAndGetAddressOf());
+    VkResult result = vkCreateBuffer(device, &createInfo, nullptr, buffer_.ReleaseAndGetAddressOf());
     VKThrowIfFailed(result, "failed to create Vulkan buffer");
     vkGetBufferMemoryRequirements(device, buffer_, &requirements_);
 }
@@ -75,7 +77,7 @@ void VKDeviceBuffer::CreateVkBufferAndMemoryRegion(
     /* Create Vulkan bnuffer object */
     CreateVkBuffer(device, createInfo);
 
-    if (auto memoryRegion = deviceMemoryMngr.Allocate(requirements_, memoryProperties))
+    if (VKDeviceMemoryRegion* memoryRegion = deviceMemoryMngr.Allocate(requirements_, memoryProperties))
     {
         /* Bind allocated memory region to buffer */
         BindMemoryRegion(device, memoryRegion);
@@ -83,10 +85,7 @@ void VKDeviceBuffer::CreateVkBufferAndMemoryRegion(
     else
     {
         /* Failed to allocate device memory */
-        throw std::runtime_error(
-            "failed to allocate " + std::to_string(requirements_.size) +
-            " byte(s) of device memory for Vulkan buffer"
-        );
+        LLGL_TRAP("failed to allocate %" PRIu64 " byte(s) of device memory for Vulkan buffer", requirements_.size);
     }
 }
 

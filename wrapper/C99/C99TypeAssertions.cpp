@@ -16,13 +16,14 @@
     static_assert(static_cast<long>(TYPE ## Flags::VALUE) == static_cast<long>(LLGL ## TYPE ## VALUE), "LLGL" #TYPE #VALUE " does not equal flags value of LLGL::" #TYPE "Flags::" #VALUE)
 
 #define LLGL_STATIC_ASSERT_SIZE(TYPE) \
-    static_assert(sizeof(LLGL::TYPE) == sizeof(LLGL ## TYPE), "LLGL" #TYPE " does not match size of LLGL::" #TYPE)
+    static_assert(sizeof(TYPE) == sizeof(LLGL ## TYPE), "LLGL" #TYPE " does not match size of LLGL::" #TYPE)
 
 #define LLGL_STATIC_ASSERT_OFFSET(TYPE, FIELD) \
-    static_assert(offsetof(LLGL::TYPE, FIELD) == offsetof(LLGL ## TYPE, FIELD), "LLGL" #TYPE "::" #FIELD " does not match offset of LLGL::" #TYPE "::" #FIELD)
+    static_assert(offsetof(TYPE, FIELD) == offsetof(LLGL ## TYPE, FIELD), "LLGL" #TYPE "::" #FIELD " does not match offset of LLGL::" #TYPE "::" #FIELD)
 
 
 using namespace LLGL;
+using namespace Log;
 
 // namespace LLGL {
 
@@ -291,6 +292,37 @@ LLGL_STATIC_ASSERT_ENUM(Format, BC4UNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, BC4SNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, BC5UNorm);
 LLGL_STATIC_ASSERT_ENUM(Format, BC5SNorm);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC4x4);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC4x4_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC5x4);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC5x4_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC5x5);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC5x5_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC6x5);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC6x5_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC6x6);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC6x6_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x5);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x5_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x6);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x6_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x8);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC8x8_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x5);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x5_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x6);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x6_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x8);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x8_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x10);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC10x10_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC12x10);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC12x10_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC12x12);
+LLGL_STATIC_ASSERT_ENUM(Format, ASTC12x12_sRGB);
+LLGL_STATIC_ASSERT_ENUM(Format, ETC1UNorm);
+LLGL_STATIC_ASSERT_ENUM(Format, ETC2UNorm);
+LLGL_STATIC_ASSERT_ENUM(Format, ETC2UNorm_sRGB);
 
 LLGL_STATIC_ASSERT_ENUM(ImageFormat, Alpha);
 LLGL_STATIC_ASSERT_ENUM(ImageFormat, R);
@@ -304,11 +336,7 @@ LLGL_STATIC_ASSERT_ENUM(ImageFormat, ABGR);
 LLGL_STATIC_ASSERT_ENUM(ImageFormat, Depth);
 LLGL_STATIC_ASSERT_ENUM(ImageFormat, DepthStencil);
 LLGL_STATIC_ASSERT_ENUM(ImageFormat, Stencil);
-LLGL_STATIC_ASSERT_ENUM(ImageFormat, BC1);
-LLGL_STATIC_ASSERT_ENUM(ImageFormat, BC2);
-LLGL_STATIC_ASSERT_ENUM(ImageFormat, BC3);
-LLGL_STATIC_ASSERT_ENUM(ImageFormat, BC4);
-LLGL_STATIC_ASSERT_ENUM(ImageFormat, BC5);
+LLGL_STATIC_ASSERT_ENUM(ImageFormat, Compressed);
 
 LLGL_STATIC_ASSERT_ENUM(DataType, Undefined);
 LLGL_STATIC_ASSERT_ENUM(DataType, Int8);
@@ -694,6 +722,28 @@ LLGL_STATIC_ASSERT_FLAG(Misc, NoInitialData);
 LLGL_STATIC_ASSERT_FLAG(Misc, Append);
 LLGL_STATIC_ASSERT_FLAG(Misc, Counter);
 
+LLGL_STATIC_ASSERT_FLAG(StdOut, Colored);
+
+LLGL_STATIC_ASSERT_FLAG(Color, Default);
+LLGL_STATIC_ASSERT_FLAG(Color, Red);
+LLGL_STATIC_ASSERT_FLAG(Color, Green);
+LLGL_STATIC_ASSERT_FLAG(Color, Blue);
+LLGL_STATIC_ASSERT_FLAG(Color, Bright);
+LLGL_STATIC_ASSERT_FLAG(Color, Bold);
+LLGL_STATIC_ASSERT_FLAG(Color, Underline);
+LLGL_STATIC_ASSERT_FLAG(Color, FullRGB);
+LLGL_STATIC_ASSERT_FLAG(Color, Yellow);
+LLGL_STATIC_ASSERT_FLAG(Color, Pink);
+LLGL_STATIC_ASSERT_FLAG(Color, Cyan);
+LLGL_STATIC_ASSERT_FLAG(Color, Gray);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightRed);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightGreen);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightBlue);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightYellow);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightPink);
+LLGL_STATIC_ASSERT_FLAG(Color, BrightCyan);
+LLGL_STATIC_ASSERT_FLAG(Color, White);
+
 
 /* ----- Structures ----- */
 
@@ -802,9 +852,11 @@ LLGL_STATIC_ASSERT_OFFSET(AttachmentClear, colorAttachment);
 LLGL_STATIC_ASSERT_OFFSET(AttachmentClear, clearValue);
 
 LLGL_STATIC_ASSERT_SIZE(CommandBufferDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(CommandBufferDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(CommandBufferDescriptor, flags);
 LLGL_STATIC_ASSERT_OFFSET(CommandBufferDescriptor, numNativeBuffers);
 LLGL_STATIC_ASSERT_OFFSET(CommandBufferDescriptor, minStagingPoolSize);
+LLGL_STATIC_ASSERT_OFFSET(CommandBufferDescriptor, renderPass);
 
 LLGL_STATIC_ASSERT_SIZE(FormatAttributes);
 LLGL_STATIC_ASSERT_OFFSET(FormatAttributes, bitSize);
@@ -838,8 +890,10 @@ LLGL_STATIC_ASSERT_OFFSET(TextureRegion, offset);
 LLGL_STATIC_ASSERT_OFFSET(TextureRegion, extent);
 
 LLGL_STATIC_ASSERT_SIZE(TextureDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, type);
 LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, bindFlags);
+LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, cpuAccessFlags);
 LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, miscFlags);
 LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, format);
 LLGL_STATIC_ASSERT_OFFSET(TextureDescriptor, extent);
@@ -863,6 +917,7 @@ LLGL_STATIC_ASSERT_OFFSET(SubresourceFootprint, layerSize);
 LLGL_STATIC_ASSERT_OFFSET(SubresourceFootprint, layerStride);
 
 LLGL_STATIC_ASSERT_SIZE(SwapChainDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, resolution);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, colorBits);
 LLGL_STATIC_ASSERT_OFFSET(SwapChainDescriptor, depthBits);
@@ -939,6 +994,7 @@ LLGL_STATIC_ASSERT_OFFSET(MutableImageView, data);
 LLGL_STATIC_ASSERT_OFFSET(MutableImageView, dataSize);
 
 LLGL_STATIC_ASSERT_SIZE(SamplerDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(SamplerDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(SamplerDescriptor, addressModeU);
 LLGL_STATIC_ASSERT_OFFSET(SamplerDescriptor, addressModeV);
 LLGL_STATIC_ASSERT_OFFSET(SamplerDescriptor, addressModeW);
@@ -961,9 +1017,9 @@ LLGL_STATIC_ASSERT_OFFSET(ResourceViewDescriptor, bufferView);
 LLGL_STATIC_ASSERT_OFFSET(ResourceViewDescriptor, initialCount);
 
 LLGL_STATIC_ASSERT_SIZE(ResourceHeapDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(ResourceHeapDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(ResourceHeapDescriptor, pipelineLayout);
 LLGL_STATIC_ASSERT_OFFSET(ResourceHeapDescriptor, numResourceViews);
-LLGL_STATIC_ASSERT_OFFSET(ResourceHeapDescriptor, barrierFlags);
 
 LLGL_STATIC_ASSERT_SIZE(ShaderMacro);
 LLGL_STATIC_ASSERT_OFFSET(ShaderMacro, name);
@@ -979,6 +1035,7 @@ LLGL_STATIC_ASSERT_OFFSET(AttachmentDescriptor, mipLevel);
 LLGL_STATIC_ASSERT_OFFSET(AttachmentDescriptor, arrayLayer);
 
 LLGL_STATIC_ASSERT_SIZE(RenderTargetDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, renderPass);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, resolution);
 LLGL_STATIC_ASSERT_OFFSET(RenderTargetDescriptor, samples);
@@ -1004,6 +1061,7 @@ LLGL_STATIC_ASSERT_OFFSET(QueryPipelineStatistics, tessEvaluationShaderInvocatio
 LLGL_STATIC_ASSERT_OFFSET(QueryPipelineStatistics, computeShaderInvocations);
 
 LLGL_STATIC_ASSERT_SIZE(QueryHeapDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(QueryHeapDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(QueryHeapDescriptor, type);
 LLGL_STATIC_ASSERT_OFFSET(QueryHeapDescriptor, numQueries);
 LLGL_STATIC_ASSERT_OFFSET(QueryHeapDescriptor, renderCondition);
@@ -1014,6 +1072,7 @@ LLGL_STATIC_ASSERT_OFFSET(AttachmentFormatDescriptor, loadOp);
 LLGL_STATIC_ASSERT_OFFSET(AttachmentFormatDescriptor, storeOp);
 
 LLGL_STATIC_ASSERT_SIZE(RenderPassDescriptor);
+LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, debugName);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, colorAttachments);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, depthAttachment);
 LLGL_STATIC_ASSERT_OFFSET(RenderPassDescriptor, stencilAttachment);
@@ -1079,6 +1138,16 @@ LLGL_STATIC_ASSERT_OFFSET(ProfileCommandBufferRecord, querySections);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandBufferRecord, renderConditionSections);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandBufferRecord, drawCommands);
 LLGL_STATIC_ASSERT_OFFSET(ProfileCommandBufferRecord, dispatchCommands);
+
+LLGL_STATIC_ASSERT_SIZE(ProfileTimeRecord);
+LLGL_STATIC_ASSERT_OFFSET(ProfileTimeRecord, annotation);
+LLGL_STATIC_ASSERT_OFFSET(ProfileTimeRecord, cpuTicksStart);
+LLGL_STATIC_ASSERT_OFFSET(ProfileTimeRecord, cpuTicksEnd);
+LLGL_STATIC_ASSERT_OFFSET(ProfileTimeRecord, elapsedTime);
+
+LLGL_STATIC_ASSERT_SIZE(ColorCodes);
+LLGL_STATIC_ASSERT_OFFSET(ColorCodes, textFlags);
+LLGL_STATIC_ASSERT_OFFSET(ColorCodes, backgroundFlags);
 
 
 // } /namespace LLGL

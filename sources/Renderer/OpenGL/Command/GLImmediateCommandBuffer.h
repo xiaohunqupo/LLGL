@@ -31,12 +31,17 @@ class GLImmediateCommandBuffer final : public GLCommandBuffer
 
     public:
 
-        GLImmediateCommandBuffer(GLStateManager& stateManager);
+        GLImmediateCommandBuffer();
 
     public:
 
         // Returns true.
         bool IsImmediateCmdBuffer() const override;
+
+    private:
+
+        void BindResource(GLResourceType type, GLuint slot, std::uint32_t descriptor, Resource& resource);
+        void BindCombinedResource(GLResourceType type, const GLuint* slots, std::uint32_t numSlots, Resource& resource);
 
     private:
 

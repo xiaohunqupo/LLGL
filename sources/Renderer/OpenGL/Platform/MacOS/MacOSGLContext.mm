@@ -9,8 +9,10 @@
 #include "../../../../Platform/MacOS/MacOSWindow.h"
 #include "../../../../Core/CoreUtils.h"
 #include "../../../CheckedCast.h"
+#include "../../../StaticAssertions.h"
 #include "../../../TextureUtils.h"
 #include <LLGL/Platform/NativeHandle.h>
+#include <LLGL/Backend/OpenGL/NativeHandle.h>
 #include <LLGL/Log.h>
 
 
@@ -18,15 +20,27 @@ namespace LLGL
 {
 
 
+/*
+ * GLContext class
+ */
+
+LLGL_ASSERT_STDLAYOUT_STRUCT( OpenGL::RenderSystemNativeHandle );
+
 std::unique_ptr<GLContext> GLContext::Create(
     const GLPixelFormat&                pixelFormat,
     const RendererConfigurationOpenGL&  profile,
     Surface&                            surface,
-    GLContext*                          sharedContext)
+    GLContext*                          sharedContext,
+    const ArrayView<char>&              customNativeHandle)
 {
     MacOSGLContext* sharedContextGLNS = (sharedContext != nullptr ? LLGL_CAST(MacOSGLContext*, sharedContext) : nullptr);
     return MakeUnique<MacOSGLContext>(pixelFormat, profile, surface, sharedContextGLNS);
 }
+
+
+/*
+ * MacOSGLContext class
+ */
 
 MacOSGLContext::MacOSGLContext(
     const GLPixelFormat&                pixelFormat,
@@ -50,6 +64,17 @@ int MacOSGLContext::GetSamples() const
     return samples_;
 }
 
+bool MacOSGLContext::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize) const
+{
+    if (nativeHandle != nullptr && nativeHandleSize == sizeof(OpenGL::RenderSystemNativeHandle))
+    {
+        auto* nativeHandleGL = reinterpret_cast<OpenGL::RenderSystemNativeHandle*>(nativeHandle);
+        nativeHandleGL->context = ctx_;
+        return true;
+    }
+    return false;
+}
+
 static NSOpenGLContext* g_currentNSGLContext;
 
 void MacOSGLContext::MakeNSOpenGLContextCurrent(NSOpenGLContext* context)
@@ -68,13 +93,15 @@ void MacOSGLContext::MakeNSOpenGLContextCurrent(NSOpenGLContext* context)
 
 bool MacOSGLContext::SetSwapInterval(int interval)
 {
-    #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_14
+    #if MAC_OS_X_VERSION_MAX_ALLOWED >= MAC_OS_X_VERSION_10_14 && !LLGL_GL_ENABLE_OPENGL2X
     [ctx_ setValues:&interval forParameter:NSOpenGLContextParameterSwapInterval];
     #else
     [ctx_ setValues:&interval forParameter:NSOpenGLCPSwapInterval];
     #endif
     return true;
 }
+
+#if !LLGL_GL_ENABLE_OPENGL2X
 
 static NSOpenGLPixelFormatAttribute TranslateNSOpenGLProfile(const RendererConfigurationOpenGL& profile)
 {
@@ -100,18 +127,24 @@ static NSOpenGLPixelFormatAttribute TranslateNSOpenGLProfile(const RendererConfi
     throw std::runtime_error("failed to choose OpenGL profile (only compatibility profile, 3.2 core profile, and 4.1 core profile are supported)");
 }
 
+#endif // /!LLGL_GL_ENABLE_OPENGL2X
+
 bool MacOSGLContext::CreatePixelFormat(const GLPixelFormat& pixelFormat, const RendererConfigurationOpenGL& profile)
 {
+    #if !LLGL_GL_ENABLE_OPENGL2X
     const NSOpenGLPixelFormatAttribute profileAttrib = TranslateNSOpenGLProfile(profile);
+    #endif
 
     /* Find suitable pixel format (for samples > 0) */
-    for (samples_ = pixelFormat.samples; samples_ > 0; --samples_)
+    for (samples_ = std::max<int>(1, pixelFormat.samples); samples_ > 0; --samples_)
     {
         NSOpenGLPixelFormatAttribute attribs[] =
         {
             NSOpenGLPFAAccelerated,
             NSOpenGLPFADoubleBuffer,
+            #if !LLGL_GL_ENABLE_OPENGL2X
             NSOpenGLPFAOpenGLProfile,   profileAttrib,
+            #endif
             NSOpenGLPFADepthSize,       static_cast<NSOpenGLPixelFormatAttribute>(pixelFormat.depthBits),
             NSOpenGLPFAStencilSize,     static_cast<NSOpenGLPixelFormatAttribute>(pixelFormat.stencilBits),
             NSOpenGLPFAColorSize,       24,

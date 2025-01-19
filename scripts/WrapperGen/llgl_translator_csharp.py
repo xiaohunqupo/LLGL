@@ -18,6 +18,9 @@ class CsharpProperties:
         self.fullCtor = fullCtor
 
 class CsharpTranslator(Translator):
+    class WrapperClasses:
+        STRING = 'AnsiString'
+
     def __init__(self):
         self.indentDirectives = True
 
@@ -71,6 +74,8 @@ class CsharpTranslator(Translator):
             'BindingDescriptor': CsharpProperties(getter = True, setter = True, fullCtor = True),
             'BufferDescriptor': CsharpProperties(getter = True, setter = True),
             'BufferViewDescriptor': CsharpProperties(getter = True),
+            'ColorCodes': CsharpProperties(getter = True, setter = True),
+            'CombinedTextureSamplerDescriptor': CsharpProperties(getter = True, setter = True),
             'CommandBufferDescriptor': CsharpProperties(getter = True),
             'ComputePipelineDescriptor': CsharpProperties(getter = True),
             'ComputeShaderAttributes': CsharpProperties(getter = True, setter = True, fullCtor = True),
@@ -149,13 +154,15 @@ class CsharpTranslator(Translator):
                 nonlocal isInsideStruct
                 if typename.startswith(LLGLMeta.typePrefix):
                     return typename[len(LLGLMeta.typePrefix):]
-                elif typename in [LLGLMeta.UTF8STRING, LLGLMeta.STRING]:
+                elif typename in LLGLMeta.stringClasses:
                     return 'byte*' if isInsideStruct else 'string'
                 else:
                     return typename
+                
+            sanitizedTypename = sanitizeTypename(fieldType.typename)
 
             if fieldType.baseType == StdType.STRUCT and fieldType.typename in LLGLMeta.interfaces:
-                decl.type = sanitizeTypename(fieldType.typename)
+                decl.type = sanitizedTypename
             elif fieldType.baseType == StdType.STRUCT and fieldType.typename in LLGLMeta.handles:
                 decl.type = 'IntPtr' # Translate any handle to generic pointer type
             else:
@@ -163,7 +170,7 @@ class CsharpTranslator(Translator):
                 if isInsideStruct:
                     if not noFixedScope and fieldType.arraySize > 0 and builtin:
                         decl.type += 'fixed '
-                    decl.type += builtin if builtin else sanitizeTypename(fieldType.typename)
+                    decl.type += builtin if builtin else sanitizedTypename
                     if fieldType.isPointer or fieldType.arraySize == LLGLType.DYNAMIC_ARRAY:
                         decl.type += '*'
                     elif fieldType.arraySize > 0:
@@ -174,10 +181,13 @@ class CsharpTranslator(Translator):
                         else:
                             decl.marshal = '<unroll>'
                 else:
-                    decl.type += builtin if builtin else sanitizeTypename(fieldType.typename)
+                    decl.type += builtin if builtin else sanitizedTypename
                     if fieldType.isPointer or fieldType.arraySize > 0:
-                        if LLGLAnnotation.NULLABLE in field.annotations or LLGLAnnotation.ARRAY in field.annotations:
-                            decl.type += '*'
+                        if (LLGLAnnotation.NULLABLE in field.annotations or
+                            LLGLAnnotation.ARRAY in field.annotations or
+                            sanitizedTypename in LLGLMeta.interfaces # Interfaces must never be passed as ref, so pointers are considered arrays of interfaces
+                            ):
+                                decl.type += '*'
                         elif fieldType.baseType == StdType.STRUCT:
                             if noRefTypes:
                                 decl.type += '*'
@@ -207,7 +217,7 @@ class CsharpTranslator(Translator):
             return None
 
         def identToPropertyIdent(ident):
-            return Translator.convertCamelCaseToPascalCase(ident)
+            return Translator.convertIdentToPascalCase(ident)
 
         def classNameToFlagsName(className):
             return f'{className[:-len("Descriptor")] if className.endswith("Descriptor") else className}Flags'
@@ -280,6 +290,13 @@ class CsharpTranslator(Translator):
             self.statement('/* ----- Constants ----- */')
             self.statement()
 
+            def translateConstInit(struct, init):
+                structBaseIdent = struct.name + '::'
+                if init.startswith(structBaseIdent):
+                    return init[len(structBaseIdent):]
+                else:
+                    return init
+
             for struct in constStructs:
                 self.statement('public enum {} : int'.format(struct.name))
                 self.openScope()
@@ -290,7 +307,7 @@ class CsharpTranslator(Translator):
                     declList.append(Translator.Declaration('', field.name, field.init))
 
                 for decl in declList.decls:
-                    self.statement(decl.name + declList.spaces(1, decl.name) + ' = ' + decl.init + ',')
+                    self.statement(f'{decl.name}{declList.spaces(1, decl.name)} = {translateConstInit(struct, decl.init)},')
 
                 self.closeScope()
                 self.statement()
@@ -417,7 +434,9 @@ class CsharpTranslator(Translator):
                     if managedTypeProperties:
                         declType = typeToPropertyType(fieldDecl.type, declName, struct.name)
                         declList.append(Translator.Declaration(
-                            declType, declName, field.init,
+                            CsharpTranslator.WrapperClasses.STRING if declType == 'string' else declType,
+                            declName,
+                            field.init,
                             inDeprecated = field.deprecated,
                             inOriginalType = fieldDecl.type,
                             inOriginalName = fieldDecl.ident,
@@ -432,6 +451,7 @@ class CsharpTranslator(Translator):
                     else:
                         if fieldDecl.marshal:
                             declList.append(Translator.Declaration(None, fieldDecl.marshal))
+
                         declList.append(Translator.Declaration(
                             fieldDecl.type,
                             declName,
@@ -448,17 +468,18 @@ class CsharpTranslator(Translator):
                     hasParamsWithoutDefualtArg = False
                     defaultArgsStarted = False
                     for decl in declList.decls:
+                        declType = 'string' if decl.type == CsharpTranslator.WrapperClasses.STRING else decl.type
                         if len(paramList) > 0:
                             paramList += ', '
-                        paramList += f'{decl.type} {decl.originalName}'
-                        declInit = translateInitializer(decl.init, decl.type, isParamList = True)
+                        paramList += f'{declType} {decl.originalName}'
+                        declInit = translateInitializer(decl.init, declType, isParamList = True)
                         if declInit:
                             defaultArgsStarted = True
                             paramList += f' = {declInit}'
                         else:
                             hasParamsWithoutDefualtArg = True
                             if defaultArgsStarted:
-                                paramList += f' = new {decl.type}()'
+                                paramList += f' = new {declType}()'
                                 #fatal(f"error: no initializer defined for parameter '{decl.originalName}' in constructor '{struct.name}', but default argument list has already started")
 
                     if hasParamsWithoutDefualtArg and len(paramList) > 0:
@@ -485,14 +506,20 @@ class CsharpTranslator(Translator):
                     if decl.fixedArray > 0:
                         hasUnsafeContext = True
                         
-                    if managedTypeProperties and decl.originalType.endswith('*'):
+                    if managedTypeProperties and decl.originalType.endswith('*') and decl.type != CsharpTranslator.WrapperClasses.STRING:
                         hasUnsafeContext = True
 
-                        if decl.originalType == 'byte*':
-                            # Translate string fields with internal ASCII string array
-                            self.statement(f'private string {decl.originalName};')
-                            self.statement(f'private byte[] {decl.originalName}Ascii;')
-                            self.statement(f'public string {decl.name}')
+                        # Translate array type with internal native array
+                        subType = decl.type[:-2]
+
+                        if isSafeType(subType):
+                            self.statement(f'public {decl.type}{declList.spaces(0, decl.type)}{decl.name} ' + '{ get; set; }')
+                        else:
+                            originalSubType = f'NativeLLGL.{decl.originalType[:-1]}'
+
+                            self.statement(f'private {decl.type} {decl.originalName};')
+                            self.statement(f'private {originalSubType + "[]"} {decl.originalName}Native;')
+                            self.statement(f'public {decl.type} {decl.name}')
                             self.openScope()
 
                             self.statement('get')
@@ -502,55 +529,31 @@ class CsharpTranslator(Translator):
 
                             self.statement('set')
                             self.openScope()
+                            self.statement('if (value != null)')
+                            self.openScope()
                             self.statement(f'{decl.originalName} = value;')
-                            self.statement(f'{decl.originalName}Ascii = Encoding.ASCII.GetBytes({decl.originalName} + "\\0");')
+                            self.statement(f'{decl.originalName}Native = new {originalSubType}[{decl.originalName}.Length];')
+                            self.statement(f'for (int {decl.originalName}Index = 0; {decl.originalName}Index < {decl.originalName}.Length; ++{decl.originalName}Index)')
+                            self.openScope()
+                            self.statement(f'if ({decl.originalName}[{decl.originalName}Index] != null)')
+                            self.openScope()
+                            self.statement(f'{decl.originalName}Native[{decl.originalName}Index] = {decl.originalName}[{decl.originalName}Index].Native;')
+                            self.closeScope()
+                            self.closeScope()
+                            self.closeScope()
+                            self.statement('else')
+                            self.openScope()
+                            self.statement(f'{decl.originalName} = null;')
+                            self.statement(f'{decl.originalName}Native = null;')
+                            self.closeScope()
                             self.closeScope()
 
                             self.closeScope()
-
-                        else:
-                            # Translate array type with internal native array
-                            subType = decl.type[:-2]
-
-                            if isSafeType(subType):
-                                self.statement(f'public {decl.type}{declList.spaces(0, decl.type)}{decl.name} ' + '{ get; set; }')
-                            else:
-                                originalSubType = f'NativeLLGL.{decl.originalType[:-1]}'
-
-                                self.statement(f'private {decl.type} {decl.originalName};')
-                                self.statement(f'private {originalSubType + "[]"} {decl.originalName}Native;')
-                                self.statement(f'public {decl.type} {decl.name}')
-                                self.openScope()
-
-                                self.statement('get')
-                                self.openScope()
-                                self.statement(f'return {decl.originalName};')
-                                self.closeScope()
-
-                                self.statement('set')
-                                self.openScope()
-                                self.statement('if (value != null)')
-                                self.openScope()
-                                self.statement(f'{decl.originalName} = value;')
-                                self.statement(f'{decl.originalName}Native = new {originalSubType}[{decl.originalName}.Length];')
-                                self.statement(f'for (int {decl.originalName}Index = 0; {decl.originalName}Index < {decl.originalName}.Length; ++{decl.originalName}Index)')
-                                self.openScope()
-                                self.statement(f'if ({decl.originalName}[{decl.originalName}Index] != null)')
-                                self.openScope()
-                                self.statement(f'{decl.originalName}Native[{decl.originalName}Index] = {decl.originalName}[{decl.originalName}Index].Native;')
-                                self.closeScope()
-                                self.closeScope()
-                                self.closeScope()
-                                self.statement('else')
-                                self.openScope()
-                                self.statement(f'{decl.originalName} = null;')
-                                self.statement(f'{decl.originalName}Native = null;')
-                                self.closeScope()
-                                self.closeScope()
-
-                                self.closeScope()
 
                     else:
+                        if decl.type == CsharpTranslator.WrapperClasses.STRING:
+                            hasUnsafeContext = True
+
                         fieldStmt = f'public {decl.type}{declList.spaces(0, decl.type)}{decl.name}'
                         if fieldsAsProperties:
                             fieldStmt += ' { get; set; }'
@@ -609,7 +612,7 @@ class CsharpTranslator(Translator):
                             if subscript != '':
                                 fatal(f"cannot generate fixed array for 'byte* {decl.name}'")
                             if decl.originalType == 'byte*':
-                                self.statement(f'fixed (byte* {decl.originalName}Ptr = {decl.originalName}Ascii)')
+                                self.statement(f'fixed (byte* {decl.originalName}Ptr = {decl.name}.Ascii)')
                                 self.openScope()
                                 self.statement(f'native.{decl.originalName} = {decl.originalName}Ptr;')
                                 self.closeScope()

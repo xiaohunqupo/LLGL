@@ -13,6 +13,10 @@
 #include <Gauss/Scale.h>
 
 
+/*
+Renders a matrix of source/destination blend state combinations to ensure the configurations work the same on all backends.
+Each combination is tested with two simple geometries (rectangles) that overlap to visualize its blending effect.
+*/
 DEF_TEST( BlendStates )
 {
     if (shaders[VSTextured] == nullptr || shaders[PSTextured] == nullptr)
@@ -61,7 +65,7 @@ DEF_TEST( BlendStates )
             target0Desc.dstColor = blendPairs[j].color;
             target0Desc.srcAlpha = blendPairs[i].alpha;
             target0Desc.dstAlpha = blendPairs[j].alpha;
-            pso[i][j] = renderer->CreatePipelineState(psoDesc);
+            CREATE_GRAPHICS_PSO_EXT(pso[i][j], psoDesc, "psoBlendStates");
         }
     }
 
@@ -80,8 +84,8 @@ DEF_TEST( BlendStates )
     // Initialize viepwort to fit all blend state scenes into a single window
     Viewport viewport;
     {
-        viewport.width  = static_cast<float>(resolution.width ) / static_cast<float>(numBlendOps);
-        viewport.height = static_cast<float>(resolution.height) / static_cast<float>(numBlendOps);
+        viewport.width  = static_cast<float>(opt.resolution.width ) / static_cast<float>(numBlendOps);
+        viewport.height = static_cast<float>(opt.resolution.height) / static_cast<float>(numBlendOps);
     }
 
     // Render scene
@@ -131,7 +135,7 @@ DEF_TEST( BlendStates )
             }
 
             // Capture framebuffer
-            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
         }
         cmdBuffer->EndRenderPass();
     }

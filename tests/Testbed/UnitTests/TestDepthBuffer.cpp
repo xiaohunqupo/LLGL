@@ -23,35 +23,36 @@ DEF_TEST( DepthBuffer )
     // Create texture for readback with depth-only format (D32Float)
     TextureDescriptor texDesc;
     {
+        texDesc.debugName       = "readbackTex";
         texDesc.format          = Format::D32Float;
-        texDesc.extent.width    = resolution.width;
-        texDesc.extent.height   = resolution.height;
+        texDesc.extent.width    = opt.resolution.width;
+        texDesc.extent.height   = opt.resolution.height;
         texDesc.bindFlags       = BindFlags::DepthStencilAttachment;
         texDesc.mipLevels       = 1;
     }
     Texture* readbackTex = renderer->CreateTexture(texDesc);
-    readbackTex->SetName("readbackTex");
 
     // Create depth-only render target for scene
     RenderTargetDescriptor renderTargetDesc;
     {
-        renderTargetDesc.resolution             = resolution;
+        renderTargetDesc.debugName              = "renderTarget";
+        renderTargetDesc.resolution             = opt.resolution;
         renderTargetDesc.depthStencilAttachment = readbackTex;
     }
     RenderTarget* renderTarget = renderer->CreateRenderTarget(renderTargetDesc);
-    renderTarget->SetName("renderTarget");
 
     // Create PSO for rendering to the depth buffer
     GraphicsPipelineDescriptor psoDesc;
     {
-        psoDesc.pipelineLayout      = layouts[PipelineSolid];
-        psoDesc.renderPass          = renderTarget->GetRenderPass();
-        psoDesc.vertexShader        = shaders[VSSolid];
-        psoDesc.depth.testEnabled   = true;
-        psoDesc.depth.writeEnabled  = true;
-        psoDesc.rasterizer.cullMode = CullMode::Back;
+        psoDesc.pipelineLayout              = layouts[PipelineSolid];
+        psoDesc.renderPass                  = renderTarget->GetRenderPass();
+        psoDesc.vertexShader                = shaders[VSSolid];
+        psoDesc.depth.testEnabled           = true;
+        psoDesc.depth.writeEnabled          = true;
+        psoDesc.rasterizer.cullMode         = CullMode::Back;
+        psoDesc.blend.targets[0].colorMask  = 0; // Disable rasterize with colorMask=0 since we don't use a fragment shader
     }
-    PipelineState* pso = renderer->CreatePipelineState(psoDesc);
+    CREATE_GRAPHICS_PSO(pso, psoDesc, "psoDepthBuf");
 
     if (const Report* report = pso->GetReport())
     {
@@ -85,7 +86,7 @@ DEF_TEST( DepthBuffer )
             // Draw scene
             cmdBuffer->Clear(ClearFlags::Depth);
             cmdBuffer->SetPipelineState(*pso);
-            cmdBuffer->SetViewport(resolution);
+            cmdBuffer->SetViewport(opt.resolution);
             cmdBuffer->SetVertexBuffer(*meshBuffer);
             cmdBuffer->SetIndexBuffer(*meshBuffer, Format::R32UInt, models[ModelCube].indexBufferOffset);
             cmdBuffer->SetResource(0, *sceneCbuffer);
@@ -98,8 +99,8 @@ DEF_TEST( DepthBuffer )
     // Readback depth buffer and compare with expected result
     const Offset3D readbackTexPosition
     {
-        static_cast<std::int32_t>(resolution.width/2),
-        static_cast<std::int32_t>(resolution.height/2),
+        static_cast<std::int32_t>(opt.resolution.width/2),
+        static_cast<std::int32_t>(opt.resolution.height/2),
         0,
     };
     const TextureRegion readbackTexRegion{ readbackTexPosition, Extent3D{ 1, 1, 1 } };
@@ -132,7 +133,7 @@ DEF_TEST( DepthBuffer )
     }
     renderer->ReadTexture(*readbackTex, TextureRegion{ Offset3D{}, texDesc.extent }, dstImageView);
 
-    SaveDepthImage(readbackDepthBuffer, resolution, "DepthBuffer", 1.0f, 10.0f);
+    SaveDepthImage(readbackDepthBuffer, opt.resolution, "DepthBuffer", 1.0f, 10.0f);
 
     const DiffResult diff = DiffImages("DepthBuffer");
 

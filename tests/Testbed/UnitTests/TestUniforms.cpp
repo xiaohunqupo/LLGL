@@ -12,6 +12,11 @@
 #include <Gauss/Scale.h>
 
 
+/*
+Test changing uniforms dynamically before each draw call via CommandBuffer::SetUniforms().
+In D3D, the uniforms are also distributed over two cbuffers, one explicitly "Model" and one implicitly "$Globals".
+LLGL must be able to assign the uniforms accordingly no matter how they are distributed in how many cbuffers in the shader.
+*/
 DEF_TEST( Uniforms )
 {
     static TestResult result = TestResult::Passed;
@@ -52,6 +57,7 @@ DEF_TEST( Uniforms )
 
         GraphicsPipelineDescriptor psoDesc;
         {
+            psoDesc.debugName                       = "Test.Uniforms.PSO";
             psoDesc.pipelineLayout                  = psoLayout;
             psoDesc.renderPass                      = swapChain->GetRenderPass();
             psoDesc.vertexShader                    = shaders[VSDynamic];
@@ -61,20 +67,11 @@ DEF_TEST( Uniforms )
             psoDesc.rasterizer.cullMode             = CullMode::Back;
             psoDesc.blend.targets[0].blendEnabled   = true;
         }
-        pso = renderer->CreatePipelineState(psoDesc);
-
-        if (const Report* report = pso->GetReport())
-        {
-            if (report->HasErrors())
-            {
-                Log::Errorf("PSO creation failed:\n%s", report->GetText());
-                return TestResult::FailedErrors;
-            }
-        }
+        CREATE_GRAPHICS_PSO_EXT(pso, psoDesc, nullptr);
     }
 
     // Skip every other frame on fast test
-    if (fastTest && (frame % 2 == 0))
+    if (opt.fastTest && (frame % 2 == 0))
         return TestResult::ContinueSkipFrame;
 
     // Update scene constants
@@ -93,14 +90,14 @@ DEF_TEST( Uniforms )
         Gs::Scale(wMatrix, Gs::Vector3f{ 1, scale, 1 });
     };
 
-    struct alignas(4) ModelUniforms
+    struct alignas(16) ModelUniforms
     {
         Gs::Matrix4f    wMatrix;
         ColorRGBAf      solidColor;
         Gs::Vector3f    lightVec = { 0, 0, -1 };
     };
 
-    static_assert(sizeof(ModelUniforms) == (16+4+3)*sizeof(float), "ModelUniforms must be 6 float4-vectors large (92 bytes)");
+    static_assert(sizeof(ModelUniforms) == (16+4+4)*sizeof(float), "ModelUniforms must be 6 float4-vectors large (92 bytes)");
     static_assert(offsetof(ModelUniforms, solidColor) == 64, "ModelUniforms::solidColor must have offset 64");
     static_assert(offsetof(ModelUniforms, lightVec) == 80, "ModelUniforms::lightVec must have offset 80");
 
@@ -129,7 +126,7 @@ DEF_TEST( Uniforms )
         {
             // Draw scene
             cmdBuffer->Clear(ClearFlags::ColorDepth, ClearValue{ bgColor });
-            cmdBuffer->SetViewport(resolution);
+            cmdBuffer->SetViewport(opt.resolution);
             cmdBuffer->SetResource(0, *sceneCbuffer);
 
             // Draw top part
@@ -163,7 +160,7 @@ DEF_TEST( Uniforms )
             cmdBuffer->DrawIndexed(mesh.numIndices, 0);
 
             // Capture framebuffer
-            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
         }
         cmdBuffer->EndRenderPass();
     }
@@ -183,7 +180,7 @@ DEF_TEST( Uniforms )
     if (intermediateResult != TestResult::Passed)
         result = intermediateResult;
 
-    if (intermediateResult == TestResult::Passed || greedy)
+    if (intermediateResult == TestResult::Passed || opt.greedy)
     {
         if (frame + 1 < numFrames)
             return TestResult::Continue;

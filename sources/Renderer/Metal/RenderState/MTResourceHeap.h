@@ -17,6 +17,7 @@
 #include <LLGL/Container/ArrayView.h>
 #include <LLGL/Container/SmallVector.h>
 #include "../Shader/MTShaderStage.h"
+#include "../../BindingIterator.h"
 #include "../../SegmentedBuffer.h"
 #include <vector>
 #include <functional>
@@ -28,7 +29,6 @@ namespace LLGL
 
 enum MTResourceType : std::uint32_t;
 class MTTexture;
-class BindingDescriptorIterator;
 struct MTResourceBinding;
 struct ResourceHeapDescriptor;
 struct TextureViewDescriptor;
@@ -180,7 +180,7 @@ class MTResourceHeap final : public ResourceHeap
     private:
 
         SmallVector<BindingSegmentLocation> bindingMap_;                    // Maps a binding index to a descriptor location.
-        BufferSegmentation                  segmentation_;
+        BufferSegmentation                  segmentation_           = {};
 
         SegmentedBuffer                     heap_;                          // Buffer with resource binding information and stride (in bytes) per descriptor set
         std::uint32_t                       heapOffsetKernel_       = 0;    // Heap offset for kernel resources.

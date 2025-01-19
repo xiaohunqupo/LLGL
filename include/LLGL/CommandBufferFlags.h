@@ -16,6 +16,8 @@ namespace LLGL
 {
 
 
+class RenderPass;
+
 /* ----- Enumerations ----- */
 
 /**
@@ -72,10 +74,19 @@ struct CommandBufferFlags
     enum
     {
         /**
-        \brief Specifies that the encoded command buffer will be submitted as a secondary command buffer.
+        \brief Specifies that the command buffer will be submitted as a secondary command buffer which yields only a limited set of commands.
         \remarks If this is specified, the command buffer must be submitted using the \c Execute function of a primary command buffer.
         \remarks This cannot be used in combination with the \c ImmediateSubmit flag.
+        \remarks A secondary command buffer can only encode a limited set of commands and cannot start its own render pass.
+        If used for graphics commands, those commands will be inlined into the render pass of its primary command buffer when submitted via the \c Execute function.
+        Here is a list of commands that can be encoded with a secondary command buffer (\c Begin/\c End is implied):
+        - Setting vertex- and index buffers (CommandBuffer::SetVertexBuffer, CommandBuffer::SetVertexBufferArray, and CommandBuffer::SetIndexBuffer)
+        - Setting resources (CommandBuffer::SetResourceHeap and CommandBuffer::SetResource)
+        - Setting pipeline states (CommandBuffer::SetPipelineState, CommandBuffer::SetBlendFactor, CommandBuffer::SetStencilReference, and CommandBuffer::SetUniforms)
+        - Draw commands (CommandBuffer::Draw, CommandBuffer::DrawIndexed, CommandBuffer::DrawInstanced, CommandBuffer::DrawIndexedInstanced, CommandBuffer::DrawIndirect, and CommandBuffer::DrawIndexedIndirect)
+        - Compute commands (CommandBuffer::Dispatch, CommandBuffer::DispatchIndirect)
         \see CommandBuffer::Execute
+        \see CommandBufferDescriptor::renderPass
         */
         Secondary       = (1 << 0),
 
@@ -258,23 +269,31 @@ struct CommandBufferDescriptor
     }
 
     /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*         debugName           = nullptr;
+
+    /**
     \brief Specifies the creation flags for the command buffer. By default 0.
     \remarks If no flags are specified (i.e. the default value),
     the command buffer must be encoded again after it has been submitted to the command queue.
     \see CommandBufferFlags
     */
-    long            flags               = 0;
+    long                flags               = 0;
 
     /**
-    \brief Specifies the number of internal native command buffers. By default 2.
+    \brief Specifies the number of internal native command buffers. 0 specifies to let the backend decide how many native buffers to allocate. By default 0.
     \remarks This is only a hint to the framework, since not all rendering APIs support command buffers natively.
     For those that do, however, this member specifies how many native command buffers are to be allocated internally.
     These native command buffers are then switched everytime encoding begins with the CommandBuffer::Begin function.
     The benefit of having multiple native command buffers is that it reduces the time the GPU is idle
     because it waits for a command buffer to be completed before it can be reused.
+    For command buffers that are only recorded once and submitted multiple times, it makes sense to allocate only a single native command buffer.
     \see CommandBuffer::Begin
     */
-    std::uint32_t   numNativeBuffers    = 2;
+    std::uint32_t       numNativeBuffers    = 0;
 
     /**
     \brief Specifies the minimum size (in bytes) for the staging pool (if supported). By default 65536 (or <tt>0xFFFF + 1</tt>).
@@ -283,7 +302,18 @@ struct CommandBufferDescriptor
     For command buffers that will make many and large buffer updates, increase this size to fine-tune performance.
     \see CommandBuffer::UpdateBuffer
     */
-    std::uint64_t   minStagingPoolSize  = (0xFFFF + 1);
+    std::uint64_t       minStagingPoolSize  = (0xFFFF + 1);
+
+    /**
+    \brief Optional render pass object for secondary command buffers. By default null.
+    \remarks Specifies a RenderPass that is used for inheritance information.
+    This allows the command buffer to continue a render pass that was started by a primary command buffer.
+    If this is null, the secondary command buffer must start and end its own render pass section,
+    unless the backend does not natively support render passes.
+    This field is ignored if \c flags does not include the CommandBufferFlags::Secondary flag.
+    \see CommandBufferFlags::Secondary
+    */
+    const RenderPass*   renderPass          = nullptr;
 };
 
 

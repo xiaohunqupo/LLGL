@@ -13,9 +13,10 @@ namespace LLGL
     {
         internal NativeLLGL.SwapChain NativeSub { get; private set; }
 
-        internal SwapChain(NativeLLGL.SwapChain native) : base(native.AsRenderTarget())
+        internal SwapChain(NativeLLGL.SwapChain native, string debugName = null) : base(native.AsRenderTarget())
         {
             NativeSub = native;
+            InitializeDebugName(debugName);
         }
 
         ~SwapChain()
@@ -29,6 +30,14 @@ namespace LLGL
             get
             {
                 return new Surface(NativeLLGL.GetSurface(NativeSub));
+            }
+        }
+
+        public bool IsPresentable
+        {
+            get
+            {
+                return NativeLLGL.IsPresentable(NativeSub);
             }
         }
 

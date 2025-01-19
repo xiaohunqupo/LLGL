@@ -8,6 +8,7 @@
 #include "MTRenderSystem.h"
 #include "../CheckedCast.h"
 #include "../TextureUtils.h"
+#include "../RenderSystemUtils.h"
 #include "../../Core/CoreUtils.h"
 #include "../../Core/Exception.h"
 #include "../../Core/Vendor.h"
@@ -30,10 +31,12 @@ namespace LLGL
 
 /* ----- Common ----- */
 
-MTRenderSystem::MTRenderSystem()
+MTRenderSystem::MTRenderSystem(const RenderSystemDescriptor& renderSystemDesc)
 {
-    CreateDeviceResources();
-    QueryRenderingCaps();
+    if (auto* customNativeHandle = GetRendererNativeHandle<Metal::RenderSystemNativeHandle>(renderSystemDesc))
+        CreateDeviceResources(customNativeHandle->device);
+    else
+        CreateDeviceResources();
 }
 
 MTRenderSystem::~MTRenderSystem()
@@ -45,7 +48,7 @@ MTRenderSystem::~MTRenderSystem()
 
 SwapChain* MTRenderSystem::CreateSwapChain(const SwapChainDescriptor& swapChainDesc, const std::shared_ptr<Surface>& surface)
 {
-    return swapChains_.emplace<MTSwapChain>(device_, swapChainDesc, surface);
+    return swapChains_.emplace<MTSwapChain>(device_, swapChainDesc, surface, GetRendererInfo());
 }
 
 void MTRenderSystem::Release(SwapChain& swapChain)
@@ -64,10 +67,16 @@ CommandQueue* MTRenderSystem::GetCommandQueue()
 
 CommandBuffer* MTRenderSystem::CreateCommandBuffer(const CommandBufferDescriptor& commandBufferDesc)
 {
-    if ((commandBufferDesc.flags & (CommandBufferFlags::MultiSubmit | CommandBufferFlags::Secondary)) != 0)
-        return commandBuffers_.emplace<MTMultiSubmitCommandBuffer>(device_, commandBufferDesc);
-    else
+    /*
+    Even though MTDirectCommandBuffer can be submitted in a deferred fashion,
+    the pool of native Metal command buffers is undefined and we cannot ensure there are enough available before Metal runs out of them.
+    Therefore, we only create a direct command buffer (i.e. no virtual command encoding) when an immediate context is requested
+    and the command buffer will be submitted immediately after encoding is done.
+    */
+    if ((commandBufferDesc.flags & CommandBufferFlags::ImmediateSubmit) != 0)
         return commandBuffers_.emplace<MTDirectCommandBuffer>(device_, *commandQueue_, commandBufferDesc);
+    else
+        return commandBuffers_.emplace<MTMultiSubmitCommandBuffer>(device_, commandBufferDesc);
 }
 
 void MTRenderSystem::Release(CommandBuffer& commandBuffer)
@@ -299,13 +308,12 @@ void MTRenderSystem::Release(PipelineState& pipelineState)
 
 QueryHeap* MTRenderSystem::CreateQueryHeap(const QueryHeapDescriptor& queryHeapDesc)
 {
-    return nullptr;//todo
+    return queryHeaps_.emplace<MTQueryHeap>(device_, queryHeapDesc);
 }
 
 void MTRenderSystem::Release(QueryHeap& queryHeap)
 {
-    //todo
-    //queryHeaps_.erase(&queryHeap);
+    queryHeaps_.erase(&queryHeap);
 }
 
 /* ----- Fences ----- */
@@ -339,22 +347,20 @@ bool MTRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
  * ======= Private: =======
  */
 
-void MTRenderSystem::CreateDeviceResources()
+void MTRenderSystem::CreateDeviceResources(id<MTLDevice> sharedDevice)
 {
-    /* Create Metal device */
-    device_ = MTLCreateSystemDefaultDevice();
-    if (device_ == nil)
-        LLGL_TRAP("failed to create Metal device");
-
-    /* Initialize renderer information */
-    RendererInfo info;
+    if (sharedDevice != nil)
     {
-        info.rendererName           = "Metal " + std::string(QueryMetalVersion());
-        info.deviceName             = [[device_ name] cStringUsingEncoding:NSUTF8StringEncoding];
-        info.vendorName             = "Apple";
-        info.shadingLanguageName    = "Metal Shading Language";
+        /* Take shard Metal device and increment reference counter */
+        device_ = [sharedDevice retain];
     }
-    SetRendererInfo(info);
+    else
+    {
+        /* Create Metal device */
+        device_ = MTLCreateSystemDefaultDevice();
+        if (device_ == nil)
+            LLGL_TRAP("failed to create Metal device");
+    }
 
     /* Create command queue */
     commandQueue_ = MakeUnique<MTCommandQueue>(device_);
@@ -367,16 +373,26 @@ void MTRenderSystem::CreateDeviceResources()
     intermediateBuffer_ = MakeUnique<MTIntermediateBuffer>(device_, MTLResourceStorageModeShared, intermediateBufferAlignment);
 }
 
-void MTRenderSystem::QueryRenderingCaps()
+void MTRenderSystem::QueryRendererInfo(RendererInfo& info)
 {
-    RenderingCapabilities caps;
-    LoadFeatureSetCaps(device_, QueryHighestFeatureSet(), caps);
-    SetRenderingCaps(caps);
+    info.rendererName           = "Metal " + std::string(QueryMetalVersion());
+    info.deviceName             = [[device_ name] cStringUsingEncoding:NSUTF8StringEncoding];
+    info.vendorName             = "Apple";
+    info.shadingLanguageName    = "Metal Shading Language";
+}
+
+bool MTRenderSystem::QueryRendererDetails(RendererInfo* outInfo, RenderingCapabilities* outCaps)
+{
+    if (outInfo != nullptr)
+        QueryRendererInfo(*outInfo);
+    if (outCaps != nullptr)
+        LoadFeatureSetCaps(device_, QueryHighestFeatureSet(), *outCaps);
+    return true;
 }
 
 const char* MTRenderSystem::QueryMetalVersion() const
 {
-    const auto featureSet = QueryHighestFeatureSet();
+    const MTLFeatureSet featureSet = QueryHighestFeatureSet();
 
     #ifdef LLGL_OS_IOS
 

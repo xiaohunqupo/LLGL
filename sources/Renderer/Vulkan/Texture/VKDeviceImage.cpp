@@ -6,9 +6,9 @@
  */
 
 #include "VKDeviceImage.h"
-#include "../VKDevice.h"
 #include "../Memory/VKDeviceMemory.h"
 #include "../Memory/VKDeviceMemoryManager.h"
+#include "../Command/VKCommandContext.h"
 #include "../VKCore.h"
 #include "../../../Core/Exception.h"
 #include "../../../Core/PrintfUtils.h"
@@ -21,6 +21,23 @@ namespace LLGL
 VKDeviceImage::VKDeviceImage(VkDevice device) :
     image_ { device, vkDestroyImage }
 {
+}
+
+VKDeviceImage::VKDeviceImage(VKDeviceImage&& rhs) :
+    image_              { std::move(rhs.image_)   },
+    layout_             { rhs.layout_             },
+    memoryRequirements_ { rhs.memoryRequirements_ },
+    memoryRegion_       { rhs.memoryRegion_       }
+{
+}
+
+VKDeviceImage& VKDeviceImage::operator = (VKDeviceImage&& rhs)
+{
+    image_              = std::move(rhs.image_);
+    layout_             = rhs.layout_;
+    memoryRequirements_ = rhs.memoryRequirements_;
+    memoryRegion_       = rhs.memoryRegion_;
+    return *this;
 }
 
 void VKDeviceImage::AllocateMemoryRegion(VKDeviceMemoryManager& deviceMemoryMngr)
@@ -93,7 +110,7 @@ void VKDeviceImage::CreateVkImage(
         createInfo.sharingMode              = VK_SHARING_MODE_EXCLUSIVE; // only used by graphics queue
         createInfo.queueFamilyIndexCount    = 0;
         createInfo.pQueueFamilyIndices      = nullptr;
-        createInfo.initialLayout            = VK_IMAGE_LAYOUT_UNDEFINED;
+        createInfo.initialLayout            = VK_IMAGE_LAYOUT_UNDEFINED; // must be UNDEFINED or PREINITIALIZED
     }
     VkResult result = vkCreateImage(device, &createInfo, nullptr, image_.ReleaseAndGetAddressOf());
     VKThrowIfCreateFailed(result, "VkImage");
@@ -138,8 +155,7 @@ void VKDeviceImage::CreateVkImageView(
 }
 
 VkImageLayout VKDeviceImage::TransitionImageLayout(
-    VKDevice&                   device,
-    VkCommandBuffer             commandBuffer,
+    VKCommandContext&           context,
     VkFormat                    format,
     VkImageLayout               newLayout,
     const TextureSubresource&   subresource)
@@ -147,10 +163,10 @@ VkImageLayout VKDeviceImage::TransitionImageLayout(
     VkImageLayout oldLayout = layout_;
     if (newLayout != oldLayout)
     {
-        device.TransitionImageLayout(commandBuffer, image_, format, oldLayout, newLayout, subresource);
+        context.ImageMemoryBarrier(image_, format, oldLayout, newLayout, subresource);
         layout_ = newLayout;
     }
-    return oldLayout;
+    return (oldLayout == VK_IMAGE_LAYOUT_UNDEFINED ? layout_ : oldLayout);
 }
 
 

@@ -7,18 +7,79 @@
 
 #include "StringUtils.h"
 #include <fstream>
-#include <codecvt>
 #include <locale>
 #include <stdio.h>
 #include <algorithm>
+#include <cstring>
 #include <LLGL/Container/SmallVector.h>
 #include <LLGL/Utils/ForRange.h>
 #include "../Platform/Path.h"
+#include "../Core/Assertion.h"
+
+#include <LLGL/Platform/Platform.h>
+
+#ifdef LLGL_OS_ANDROID
+
+#include "../Platform/Android/AndroidApp.h"
+
+#ifndef __USE_BSD
+#define __USE_BSD /* Defines funopen() */
+#endif
+
+#include <stdio.h>
+#include <android/asset_manager.h>
+
+#endif
 
 
 namespace LLGL
 {
 
+
+#ifdef LLGL_OS_ANDROID
+
+static std::vector<char> ReadFileBufferPrimary(const char* filename)
+{
+    std::vector<char> content;
+
+    if (filename != nullptr && *filename != '\0')
+    {
+        ANativeActivity* activity = AndroidApp::Get().GetState()->activity;
+        LLGL_ASSERT(activity != nullptr, "ANativeActivity not set");
+
+        AAssetManager* assetMngr = activity->assetManager;
+        LLGL_ASSERT(assetMngr != nullptr, "AAssetManager not set");
+
+        if (AAsset* asset = AAssetManager_open(assetMngr, filename, AASSET_MODE_STREAMING))
+        {
+            /* Get asset size by setting position at end of stream */
+            const off_t assetSize = AAsset_seek(asset, 0, SEEK_END);
+            AAsset_seek(asset, 0, SEEK_SET);
+            if (assetSize > 0)
+            {
+                /* Read entire asset content */
+                content.resize(assetSize);
+                AAsset_read(asset, content.data(), static_cast<size_t>(assetSize));
+            }
+            AAsset_close(asset);
+        }
+    }
+
+    return content;
+}
+
+LLGL_EXPORT std::string ReadFileString(const char* filename)
+{
+    const std::vector<char> content = ReadFileBufferPrimary(filename);
+    return std::string(content.begin(), content.end());
+}
+
+LLGL_EXPORT std::vector<char> ReadFileBuffer(const char* filename)
+{
+    return ReadFileBufferPrimary(filename);
+}
+
+#else // LLGL_OS_ANDROID
 
 // Returns the specified filename either unchanged or as absolute path for mobile platforms.
 static UTF8String GetPlatformAppropriateFilename(const char* filename)
@@ -64,24 +125,25 @@ LLGL_EXPORT std::vector<char> ReadFileBuffer(const char* filename)
     return {};
 }
 
-LLGL_EXPORT std::string ToUTF8String(const std::wstring& utf16)
+#endif // /LLGL_OS_ANDROID
+
+static std::wstring ToWideStringPrimary(const char* str, std::size_t len)
 {
-    return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.to_bytes(utf16);
+    std::wstring wstr;
+    wstr.resize(len);
+    for_range(i, len)
+        wstr[i] = static_cast<wchar_t>(str[i]);
+    return wstr;
 }
 
-LLGL_EXPORT std::string ToUTF8String(const wchar_t* utf16)
+LLGL_EXPORT std::wstring ToWideString(const std::string& str)
 {
-    return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.to_bytes(utf16);
+    return ToWideStringPrimary(str.c_str(), str.size());
 }
 
-LLGL_EXPORT std::wstring ToUTF16String(const std::string& utf8)
+LLGL_EXPORT std::wstring ToWideString(const char* str)
 {
-    return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.from_bytes(utf8);
-}
-
-LLGL_EXPORT std::wstring ToUTF16String(const char* utf8)
-{
-    return std::wstring_convert<std::codecvt_utf8_utf16<wchar_t>>{}.from_bytes(utf8);
+    return ToWideStringPrimary(str, std::strlen(str));
 }
 
 void StringPrintf(std::string& str, const char* format, va_list args1, va_list args2)
@@ -100,7 +162,7 @@ void StringPrintf(std::string& str, const char* format, va_list args1, va_list a
     }
 }
 
-LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColumn>& columns)
+LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColumn>& columns, const char* delimiters)
 {
     UTF8String s;
 
@@ -134,6 +196,8 @@ LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColu
     /* Format each row for all columns */
     for_range(row, maxNumRows)
     {
+        bool startOfRow = true;
+
         do
         {
             hasMultiLineCells = false;
@@ -147,7 +211,7 @@ LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColu
                     const std::size_t indent = (multiRowQueue[col].empty() ? 0 : std::min<std::size_t>(entry.multiLineIndent, columnWidths[col]/2));
                     s.append(indent, ' ');
 
-                    const StringView cell = (!multiRowQueue[col].empty() ? multiRowQueue[col] : entry.cells[row].c_str());
+                    const StringView cell = (!startOfRow ? multiRowQueue[col] : entry.cells[row].c_str());
                     if (!(col < columnWidths.size() && cell.size() + indent > columnWidths[col]))
                     {
                         /* Append cell */
@@ -160,7 +224,7 @@ LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColu
                     {
                         /* Find position where to split current cell */
                         const std::size_t maxCellWidth  = columnWidths[col] - indent;
-                        const std::size_t delimiterPos  = cell.find_last_of(":;., ", maxCellWidth);
+                        const std::size_t delimiterPos  = (delimiters != nullptr ? cell.find_last_of(delimiters, maxCellWidth) : StringView::npos);
                         const std::size_t splitPos      = (delimiterPos == StringView::npos ? maxCellWidth : delimiterPos + 1);
 
                         /* Split cell into head and tail */
@@ -191,11 +255,17 @@ LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColu
             }
 
             s += '\n';
+            startOfRow = false;
         }
         while (hasMultiLineCells);
     }
 
     return s;
+}
+
+LLGL_EXPORT const char* GetOptionalDebugName(const char* debugName)
+{
+    return (debugName != nullptr && *debugName != '\0' ? debugName : "unnamed");
 }
 
 

@@ -49,19 +49,35 @@ using LoadVKExtensionDeviceProc     = std::function<bool(VkDevice   device  , co
 #define DECL_LOADVKEXT_PROC(EXTNAME) \
     DECL_LOADVKEXT_PROC_BASE(EXTNAME, VkDevice)
 
-#define LOAD_VKPROC(NAME)                                                               \
-    if (!LoadVKProc(handle, NAME, #NAME))                                               \
-    {                                                                                   \
-        if (abortOnFailure)                                                             \
-            LLGL_TRAP("failed to load Vulkan procedure: %s ( %s )", #NAME, extName);    \
-        return false;                                                                   \
+#define LOAD_VKPROC(NAME)                                                           \
+    if (!LoadVKProc(handle, NAME, #NAME))                                           \
+    {                                                                               \
+        if (abortOnFailure)                                                         \
+            LLGL_TRAP("failed to load Vulkan procedure: %s [%s]", #NAME, extName);  \
+        return false;                                                               \
     }
 
-#ifdef LLGL_OS_WIN32
+#if defined LLGL_OS_WIN32
 
 static bool DECL_LOADVKEXT_PROC_INSTANCE(KHR_win32_surface)
 {
     LOAD_VKPROC( vkCreateWin32SurfaceKHR );
+    return true;
+}
+
+#elif defined LLGL_OS_LINUX
+
+static bool DECL_LOADVKEXT_PROC_INSTANCE(KHR_xlib_surface)
+{
+    LOAD_VKPROC( vkCreateXlibSurfaceKHR );
+    return true;
+}
+
+#elif defined LLGL_OS_ANDROID
+
+static bool DECL_LOADVKEXT_PROC_INSTANCE(KHR_android_surface)
+{
+    LOAD_VKPROC( vkCreateAndroidSurfaceKHR );
     return true;
 }
 
@@ -129,8 +145,12 @@ bool VKLoadInstanceExtensions(VkInstance instance)
         LoadExtension("VK_" #NAME, Load_VK_##NAME)
 
     /* Load platform specific extensions */
-    #ifdef LLGL_OS_WIN32
+    #if defined LLGL_OS_WIN32
     LOAD_VKEXT( KHR_win32_surface );
+    #elif defined LLGL_OS_LINUX
+    LOAD_VKEXT( KHR_xlib_surface );
+    #elif defined LLGL_OS_ANDROID
+    LOAD_VKEXT( KHR_android_surface );
     #endif // /LLGL_OS_WIN32
 
     #undef LOAD_VKEXT
@@ -182,6 +202,7 @@ bool VKLoadDeviceExtensions(VkDevice device, const std::vector<const char*>& sup
     LOAD_VKEXT( EXT_transform_feedback              );
 
     ENABLE_VKEXT( EXT_conservative_rasterization );
+    ENABLE_VKEXT( EXT_nested_command_buffer      );
 
     #undef LOAD_VKEXT
 

@@ -49,10 +49,25 @@ enum class WarningType
 struct ProfileTimeRecord
 {
     //! Time record annotation, e.g. function name that was recorded from the CommandBuffer.
-    const char*     annotation  = "";
+    const char*     annotation      = "";
 
-    //! Elapsed time (in nanoseconds) to execute the respective command.
-    std::uint64_t   elapsedTime = 0;
+    /**
+    \brief CPU ticks at the beginning of the command.
+    \see Timer::Tick
+    */
+    std::uint64_t   cpuTicksStart   = 0;
+
+    /**
+    \brief CPU ticks at the end of the command.
+    \see Timer::Tick
+    */
+    std::uint64_t   cpuTicksEnd     = 0;
+
+    /**
+    \brief Elapsed time (in nanoseconds) to execute the respective command on the GPU.
+    \remarks If no GPU time has been recorded for this command (e.g. for the record of debug groups), this value remains zero.
+    */
+    std::uint64_t   elapsedTime     = 0;
 };
 
 struct ProfileCommandQueueRecord
@@ -259,54 +274,14 @@ struct ProfileCommandBufferRecord
     std::uint32_t dispatchCommands          = 0;
 };
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 /**
 \brief Profile of a rendered frame.
 \see RenderingDebugger::NextFrame
 */
 struct FrameProfile
 {
-    //! Custom default constructor to avoid warnings from deprecated fields.
-    inline FrameProfile() :
-        commandQueueRecord  {},
-        commandBufferRecord {},
-        timeRecords         {}
-    {
-    }
-
-    //! Custom copy constructor to avoid warnings from deprecated fields.
-    inline FrameProfile(const FrameProfile& rhs) :
-        commandQueueRecord  { rhs.commandQueueRecord  },
-        commandBufferRecord { rhs.commandBufferRecord },
-        timeRecords         { rhs.timeRecords         }
-    {
-    }
-
-    //! Custom move constructor to avoid warnings from deprecated fields.
-    inline FrameProfile(FrameProfile&& rhs) noexcept :
-        commandQueueRecord  { rhs.commandQueueRecord     },
-        commandBufferRecord { rhs.commandBufferRecord    },
-        timeRecords         { std::move(rhs.timeRecords) }
-    {
-    }
-
-    //! Custom copy operator to avoid warnings from deprecated fields.
-    inline FrameProfile& operator = (const FrameProfile& rhs)
-    {
-        this->commandQueueRecord    = rhs.commandQueueRecord;
-        this->commandBufferRecord   = rhs.commandBufferRecord;
-        this->timeRecords           = rhs.timeRecords;
-        return *this;
-    }
-
-    //! Custom move operator to avoid warnings from deprecated fields.
-    inline FrameProfile& operator = (FrameProfile&& rhs) noexcept
-    {
-        this->commandQueueRecord    = rhs.commandQueueRecord;
-        this->commandBufferRecord   = rhs.commandBufferRecord;
-        this->timeRecords           = std::move(rhs.timeRecords);
-        return *this;
-    }
-
     //! \deprecated Since 0.04b; Use global assignment operator '+=' instead!
     LLGL_DEPRECATED("FrameProfile::Clear is deprecated since 0.04b; Use default initializer instead", "=LLGL::FrameProfile{}")
     inline void Clear()
@@ -387,15 +362,15 @@ struct FrameProfile
             std::uint32_t bufferFills;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::bufferWrites instead!
-            LLGL_DEPRECATED("FrameProfile::bufferWrites is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferWrites instead!", "commandBufferRecord.bufferWrites")
+            LLGL_DEPRECATED("FrameProfile::bufferWrites is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferWrites instead!", "commandQueueRecord.bufferWrites")
             std::uint32_t bufferWrites;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::bufferReads instead!
-            LLGL_DEPRECATED("FrameProfile::bufferReads is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferReads instead!", "commandBufferRecord.bufferReads")
+            LLGL_DEPRECATED("FrameProfile::bufferReads is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferReads instead!", "commandQueueRecord.bufferReads")
             std::uint32_t bufferReads;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::bufferMappings instead!
-            LLGL_DEPRECATED("FrameProfile::bufferMappings is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferMappings instead!", "commandBufferRecord.bufferMappings")
+            LLGL_DEPRECATED("FrameProfile::bufferMappings is deprecated since 0.04b; Use ProfileCommandQueueRecord::bufferMappings instead!", "commandQueueRecord.bufferMappings")
             std::uint32_t bufferMappings;
 
             //! \deprecated Since 0.04b; Use ProfileCommandBufferRecord::textureCopies instead!
@@ -403,11 +378,11 @@ struct FrameProfile
             std::uint32_t textureCopies;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::textureWrites instead!
-            LLGL_DEPRECATED("FrameProfile::textureWrites is deprecated since 0.04b; Use ProfileCommandQueueRecord::textureWrites instead!", "commandBufferRecord.textureWrites")
+            LLGL_DEPRECATED("FrameProfile::textureWrites is deprecated since 0.04b; Use ProfileCommandQueueRecord::textureWrites instead!", "commandQueueRecord.textureWrites")
             std::uint32_t textureWrites;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::textureReads instead!
-            LLGL_DEPRECATED("FrameProfile::textureReads is deprecated since 0.04b; Use ProfileCommandQueueRecord::textureReads instead!", "commandBufferRecord.textureReads")
+            LLGL_DEPRECATED("FrameProfile::textureReads is deprecated since 0.04b; Use ProfileCommandQueueRecord::textureReads instead!", "commandQueueRecord.textureReads")
             std::uint32_t textureReads;
 
             //! \deprecated Since 0.04b; Use ProfileCommandBufferRecord::renderPassSections instead!
@@ -435,7 +410,7 @@ struct FrameProfile
             std::uint32_t dispatchCommands;
 
             //! \deprecated Since 0.04b; Use ProfileCommandQueueRecord::commandBufferSubmittions instead!
-            LLGL_DEPRECATED("FrameProfile::commandBufferSubmittions is deprecated since 0.04b; Use ProfileCommandQueueRecord::commandBufferSubmittions instead!", "commandBufferRecord.commandBufferSubmittions")
+            LLGL_DEPRECATED("FrameProfile::commandBufferSubmittions is deprecated since 0.04b; Use ProfileCommandQueueRecord::commandBufferSubmittions instead!", "commandQueueRecord.commandBufferSubmittions")
             std::uint32_t commandBufferSubmittions;
 
             //! \deprecated Since 0.04b; Use ProfileCommandBufferRecord::encodings instead!
@@ -471,6 +446,8 @@ struct FrameProfile
     */
     DynamicVector<ProfileTimeRecord>    timeRecords;
 };
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 
 } // /namespace LLGL

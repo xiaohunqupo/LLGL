@@ -15,11 +15,50 @@
 #include <LLGL/SamplerFlags.h>
 #include <LLGL/ShaderFlags.h>
 #include <LLGL/Container/StringView.h>
+#include <LLGL/Container/StringLiteral.h>
 #include <vector>
+#include <utility>
 
 
 namespace LLGL
 {
+
+
+/* ----- Flags ----- */
+
+/**
+\brief Flags for memory barriers in pipeline layouts.
+\see PipelineLayoutDescriptor::barrierFlags
+*/
+struct BarrierFlags
+{
+    enum
+    {
+        /**
+        \brief Memory barrier for Buffer resources that were created with the BindFlags::Storage bind flags.
+        \remarks Shader access to the buffer will reflect all data written to by previous shaders.
+        \see BindFlags::Storage
+        */
+        StorageBuffer   = (1 << 0),
+
+        /**
+        \brief Memory barrier for Texture resources that were created with the BindFlags::Storage bind flags.
+        \remarks Shader access to the texture will reflect all data written to by previous shaders.
+        \see BindFlags::Storage
+        */
+        StorageTexture  = (1 << 1),
+
+        /**
+        \brief Memory barrier for any storage resource. This is just a bitwise OR combination of \c StorageBuffer and \c StorageTexture.
+        \remarks Renderer backends such as Direct3D 12 and Vulkan have bookkeeping for storage resources
+        and don't have to distinguish between Buffer and Texture resource views for their barriers at time of creating the ResourceHeap.
+        Hence, using BarrierFlags::Storage by default when any resource views in the ResourceHeap have to be synchronized is recommended.
+        Only the OpenGL backend has to know at creation time what type of resources need a global barrier via \c glMemoryBarrier.
+        \see BindFlags::Storage
+        */
+        Storage         = (StorageBuffer | StorageTexture),
+    };
+};
 
 
 /* ----- Enumerations ----- */
@@ -106,6 +145,12 @@ struct BindingSlot
     /**
     \brief Specifies the zero-based binding index. By default 0.
     \remarks For Vulkan, each binding must have a unique slot within the same pipeline layout unless they are in different descriptor sets.
+    \remarks It is recommended to \e not use the binding slot 0 for buffer bindings because it might overlap with implicitly assigned slots depending on the backend.
+    - For Metal, shader resources and vertex buffers share the same binding table and LLGL binds vertex buffers starting from slot 0.
+      If more than one vertex buffer is bound, all subsequent slots will also be occupied by those vertex buffers and pipeline resources must be bound after them.
+    - For D3D11 and D3D12, the special constant buffer "$Globals" is implicitly assigned a binding slot.
+      If no other resource is explicitly assigned binding slot 0, this constant buffer will be implicitly assigned slot 0.
+      While other resources can occupy binding slot 0, this should match across all shader stages or the behavior is undefined.
     \see set
     */
     std::uint32_t index = 0;
@@ -125,6 +170,7 @@ struct BindingSlot
 /**
 \brief Layout structure for a single binding point of the pipeline layout descriptor.
 \see PipelineLayoutDescriptor::bindings
+\see PipelineLayoutDescriptor::heapBindings
 */
 struct BindingDescriptor
 {
@@ -149,19 +195,19 @@ struct BindingDescriptor
 
     //! Constructors with all attributes.
     inline BindingDescriptor(
-        const StringView&   name,
-        ResourceType        type,
-        long                bindFlags,
-        long                stageFlags,
-        const BindingSlot&  slot,
-        std::uint32_t       arraySize = 0)
+        StringLiteral         name,
+        ResourceType          type,
+        long                  bindFlags,
+        long                  stageFlags,
+        const BindingSlot&    slot,
+        std::uint32_t         arraySize = 0)
     :
-        name       { name.begin(), name.end() },
-        type       { type                     },
-        bindFlags  { bindFlags                },
-        stageFlags { stageFlags               },
-        slot       { slot                     },
-        arraySize  { arraySize                }
+        name       { std::move(name) },
+        type       { type            },
+        bindFlags  { bindFlags       },
+        stageFlags { stageFlags      },
+        slot       { slot            },
+        arraySize  { arraySize       }
     {
     }
 
@@ -175,7 +221,7 @@ struct BindingDescriptor
     \endcode
     Otherwise, the name of the resource must be included in this binding descriptor, e.g. <code>"mySampler"</code>.
     */
-    std::string     name;
+    StringLiteral   name;
 
     //! Resource view type for this layout binding. By default ResourceType::Undefined.
     ResourceType    type        = ResourceType::Undefined;
@@ -211,7 +257,7 @@ struct BindingDescriptor
 /**
 \brief Static sampler state pipeline layout descriptor.
 \remarks Static samplers are part of a pipeline layout rather than a pipeline state.
-This is the equivalent of a static sampler in a root siganture in Direct3D 12.
+This is the equivalent of a static sampler in a root signature in Direct3D 12.
 \see PipelineLayoutDescriptor::staticSamplers
 */
 struct StaticSamplerDescriptor
@@ -233,15 +279,15 @@ struct StaticSamplerDescriptor
 
     //! Initializes the static sampler with a name, stage flags, binding slot, and sampler state.
     inline StaticSamplerDescriptor(
-        const StringView&           name,
+        StringLiteral               name,
         long                        stageFlags,
         const BindingSlot&          slot,
         const SamplerDescriptor&    sampler)
     :
-        name       { name.begin(), name.end() },
-        stageFlags { stageFlags               },
-        slot       { slot                     },
-        sampler    { sampler                  }
+        name       { std::move(name) },
+        stageFlags { stageFlags      },
+        slot       { slot            },
+        sampler    { sampler         }
     {
     }
 
@@ -255,7 +301,7 @@ struct StaticSamplerDescriptor
     \endcode
     Otherwise, the name of the resource must be included in this binding descriptor, e.g. <code>"mySampler"</code>.
     */
-    std::string         name;
+    StringLiteral       name;
 
     /**
     \brief Specifies which shader stages can access this static sampler. By default 0.
@@ -290,21 +336,21 @@ struct UniformDescriptor
 
     //! Initializes the uniform descriptor with a name, type, and optional array size.
     inline UniformDescriptor(
-        const StringView&   name,
-        UniformType         type,
-        std::uint32_t       arraySize = 0)
+        StringLiteral    name,
+        UniformType      type,
+        std::uint32_t    arraySize = 0)
     :
-        name      { name.begin(), name.end() },
-        type      { type                     },
-        arraySize { arraySize                }
+        name      { std::move(name) },
+        type      { type            },
+        arraySize { arraySize       }
     {
     }
 
     /**
     \brief Specifies the name of an individual shader uniform. This <b>must not</b> be empty.
-    \remarks This describes the name of the constant itself and not its encloding constant buffer.
+    \remarks This describes the name of the constant itself and not its enclosing constant buffer.
     */
-    std::string     name;
+    StringLiteral   name;
 
     /**
     \brief Specifies the data type of the shader uniform. By default UniformType::Undefined.
@@ -318,12 +364,118 @@ struct UniformDescriptor
 };
 
 /**
-\brief Pipeline layout descritpor structure.
+\brief Descriptor structure for a combined texture-sampler.
+
+\remarks Combined texture-samplers are only required for OpenGL when a sampler is meant to be used for more than one texture in a shader.
+The following example of an HLSL (Direct3D) shader illustrates how these descriptors are meant to be used:
+\code{hlsl}
+SamplerState linearSampler;
+SamplerState nearestSampler;
+
+Texture2D colorMapA;
+Texture2D colorMapB;
+Texture2D colorMapC;
+
+float4 PSMain(float2 tc : TEXCOORD) : SV_Target {
+    // Use each sampler with two textures
+    return
+        colorMapA.Sample(linearSampler,  tc) + // Tex A with Sampler A
+        colorMapB.Sample(linearSampler,  tc) + // Tex B with Sampler A
+        colorMapB.Sample(nearestSampler, tc) + // Tex B with Sampler B
+        colorMapC.Sample(nearestSampler, tc);  // Tex C with Sampler B
+}
+\endcode
+This could be translated to GLSL as follows:
+\code{glsl}
+#version 330
+
+uniform sampler2D colorMapA_linearSampler;
+uniform sampler2D colorMapB_linearSampler;
+uniform sampler2D colorMapB_nearestSampler;
+uniform sampler2D colorMapC_nearestSampler;
+
+in vec2 tc;
+out vec4 fragColor;
+
+void main() {
+    fragColor =
+        texture(colorMapA_linearSampler,  tc) +
+        texture(colorMapB_linearSampler,  tc) +
+        texture(colorMapB_nearestSampler, tc) +
+        texture(colorMapC_nearestSampler, tc);
+}
+\endcode
+For GLSL, this requires four combined texture-sampler descriptors:
+\code{cpp}
+LLGL::PipelineLayoutDescriptor myPSOLayout;
+
+myPSOLayout.bindings = {
+    LLGL::BindingDescriptor{ "linearSampler",  LLGL::ResourceType::Sampler, ... },
+    LLGL::BindingDescriptor{ "nearestSampler", LLGL::ResourceType::Sampler, ... },
+    LLGL::BindingDescriptor{ "colorMapA",      LLGL::ResourceType::Texture, ... },
+    LLGL::BindingDescriptor{ "colorMapB",      LLGL::ResourceType::Texture, ... },
+    LLGL::BindingDescriptor{ "colorMapC",      LLGL::ResourceType::Texture, ... },
+};
+
+myPSOLayout.combinedTextureSampler = {
+    LLGL::CombinedTextureSamplerDescriptor{ "colorMapA_linearSampler",  "colorMapA", "linearSampler",  1 },
+    LLGL::CombinedTextureSamplerDescriptor{ "colorMapB_linearSampler",  "colorMapB", "linearSampler",  2 },
+    LLGL::CombinedTextureSamplerDescriptor{ "colorMapB_nearestSampler", "colorMapB", "nearestSampler", 3 },
+    LLGL::CombinedTextureSamplerDescriptor{ "colorMapC_nearestSampler", "colorMapC", "nearestSampler", 4 },
+};
+\endcode
+
+\note Only supported with: OpenGL, Vulkan.
+\see PipelineLayoutDescriptor::combinedTextureSamplers
+*/
+struct CombinedTextureSamplerDescriptor
+{
+    /**
+    \brief Specifies the name of an individual shader uniform. This <b>must not</b> be empty.
+    \remarks This is the name of the combined texture-sampler in the shader,
+    e.g. \c "myTex" for <code>uniform sampler2D myTex;</code> in GLSL.
+    */
+    StringLiteral   name;
+
+    /**
+    \brief Specifies the name of the texture binding that is meant to be combined with a sampler binding.
+    \remarks This can refer to either an entry in \c heapBindings or \c bindings of PipelineLayoutDescriptor.
+    \see BindingDescriptor::name
+    */
+    StringLiteral   textureName;
+
+    /**
+    \brief Specifies the name of the sampler binding that is meant to be combined with a texture binding.
+    \remarks This can refer to either an entry in \c heapBindings, \c bindings, or \c staticSamplers of PipelineLayoutDescriptor.
+    \see BindingDescriptor::name
+    */
+    StringLiteral   samplerName;
+
+    /**
+    \brief Specifies the binding slot of the combined texture-sampler.
+    \remarks This overrides the binding slot for both the texture and sampler binding that this combined texture-sampler refers to.
+    The binding and stage flags are each a bitwise OR combination of the texture and sampler respectively.
+    */
+    BindingSlot     slot;
+};
+
+/**
+\brief Pipeline layout descriptor structure.
 \remarks Contains all layout bindings that will be used by graphics and compute pipelines.
+\note For Vulkan, LLGL \e should be built with \c LLGL_VK_ENABLE_SPIRV_REFLECT when PSO layouts
+contain a mix of heap- and dynamic bindings, i.e. \c heapBindings and \c bindings respectively.
+Otherwise, LLGL cannot perform code reflection to create shader permutations to match binding points with various shader combinations.
 \see RenderSystem::CreatePipelineLayout
 */
 struct PipelineLayoutDescriptor
 {
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*                                     debugName               = nullptr;
+
     /**
     \brief List of layout resource heap bindings.
     \remarks These bindings refer to the resource descriptors that are all bound at once with a single ResourceHeap.
@@ -333,7 +485,7 @@ struct PipelineLayoutDescriptor
     \see ResourceViewDescriptor
     \see ResourceHeap::GetNumDescriptorSets
     */
-    std::vector<BindingDescriptor>          heapBindings;
+    std::vector<BindingDescriptor>                  heapBindings;
 
     /**
     \brief List of individual layout resource bindings.
@@ -341,20 +493,20 @@ struct PipelineLayoutDescriptor
     \remarks Individual bindings are limited to binding the entire resource as opposed to heap bindigs that can also bind a subresource view.
     \see CommandBuffer::SetResource
     */
-    std::vector<BindingDescriptor>          bindings;
+    std::vector<BindingDescriptor>                  bindings;
 
     /**
     \brief List of static sampler states with their binding points.
     \remarks These sampler states are immutable and are automatically bound with each pipeline state.
     */
-    std::vector<StaticSamplerDescriptor>    staticSamplers;
+    std::vector<StaticSamplerDescriptor>            staticSamplers;
 
     /**
     \brief List of shader uniforms that can be written dynamically.
     \remarks In Vulkan they are called "push constants", in OpenGL they are called "uniforms", and in Direct3D they are called "shader constants".
     \remarks Uniforms are not described by their binding slot, but solely by their name and type.
     They represent a small range within one or more constant buffers or push constant ranges and therefore don't have individual binding slots.
-    Their offests within these buffers are determined by LLGL when a PipelineState object (PSO) is created with a PipelineLayout that contains uniform descriptors.
+    Their offsets within these buffers are determined by LLGL when a PipelineState object (PSO) is created with a PipelineLayout that contains uniform descriptors.
     This process is highly dependent on the backend, the shaders used within the PSO, and other factors.
     It is advised to keep the number of uniforms small as there is only a very limited amount of space for uniforms:
     - Vulkan only guarantees a minimum of 128 bytes for the push constant ranges which is shared across all shader stages within a single PSO.
@@ -364,7 +516,25 @@ struct PipelineLayoutDescriptor
     Only static samplers are not counted towards root parameters.
     \see CommandBuffer::SetUniforms
     */
-    std::vector<UniformDescriptor>          uniforms;
+    std::vector<UniformDescriptor>                  uniforms;
+
+    /**
+    \brief List of combined texture-samplers.
+    \remarks This \e can be used for backends that support combined texture-samplers when a sampler binding is used for more than one texture binding
+    or if a sampler binding is used with a texture at a different binding slot.
+    For backends that only support combined texture-samplers in shaders, such as OpenGL,
+    this is required unless each texture binding in the pipeline layout has its own sampler binding at the same binding slot.
+    \note Only supported with: OpenGL (Vulkan will be supported next).
+    */
+    std::vector<CombinedTextureSamplerDescriptor>   combinedTextureSamplers;
+
+    /**
+    \brief Specifies optional resource barrier flags. By default 0.
+    \remarks If the barrier flags are non-zero, they will be applied before any resource are bound to the graphics/compute pipeline.
+    This should be used when a resource is bound to the pipeline that was previously written to.
+    \see BarrierFlags
+    */
+    long                                            barrierFlags            = 0;
 };
 
 

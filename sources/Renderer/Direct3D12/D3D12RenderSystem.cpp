@@ -11,13 +11,17 @@
 #include "../DXCommon/DXCore.h"
 #include "../TextureUtils.h"
 #include "../CheckedCast.h"
+#include "../RenderSystemUtils.h"
 #include "../../Core/Vendor.h"
 #include "../../Core/CoreUtils.h"
 #include "../../Core/Assertion.h"
 #include "D3DX12/d3dx12.h"
 #include <LLGL/Utils/ForRange.h>
+#include <LLGL/Platform/NativeHandle.h>
+#include <LLGL/Backend/Direct3D12/NativeHandle.h>
 #include <limits.h>
-#include <codecvt>
+
+#include "Shader/D3D12BuiltinShaderFactory.h"
 
 #include "Buffer/D3D12Buffer.h"
 #include "Buffer/D3D12BufferArray.h"
@@ -37,18 +41,30 @@ namespace LLGL
 
 D3D12RenderSystem::D3D12RenderSystem(const RenderSystemDescriptor& renderSystemDesc)
 {
-    const bool debugDevice = ((renderSystemDesc.flags & RenderSystemFlags::DebugDevice) != 0);
-    if (debugDevice)
+    const bool isDebugDevice = ((renderSystemDesc.flags & RenderSystemFlags::DebugDevice) != 0);
+    if (isDebugDevice)
         EnableDebugLayer();
 
-    /* Create DXGU factory 1.4, query video adapters, and create D3D12 device */
-    CreateFactory(debugDevice);
+    if (auto* customNativeHandle = GetRendererNativeHandle<Direct3D12::RenderSystemNativeHandle>(renderSystemDesc))
+    {
+        /* Query all DXGI interfaces from native handle */
+        HRESULT hr = QueryDXInterfacesFromNativeHandle(*customNativeHandle);
+        DXThrowIfFailed(hr, "failed to query D3D12 device from custom native handle");
+    }
+    else
+    {
+        /* Create DXGU factory 1.4, query video adapters, and create D3D12 device */
+        CreateFactory(isDebugDevice);
 
-    ComPtr<IDXGIAdapter> preferredAdatper;
-    QueryVideoAdapters(renderSystemDesc.flags, preferredAdatper);
+        ComPtr<IDXGIAdapter> preferredAdatper;
+        QueryVideoAdapters(renderSystemDesc.flags, preferredAdatper);
 
-    HRESULT hr = CreateDevice(preferredAdatper.Get());
-    DXThrowIfFailed(hr, "failed to create D3D12 device");
+        HRESULT hr = CreateDevice(preferredAdatper.Get(), isDebugDevice);
+        DXThrowIfFailed(hr, "failed to create D3D12 device");
+    }
+
+    /* Query and cache DXGI factory feature support */
+    tearingSupported_ = CheckFactoryFeatureSupport(DXGI_FEATURE_PRESENT_ALLOW_TEARING);
 
     /* Create command queue interface */
     commandQueue_   = MakeUnique<D3D12CommandQueue>(device_);
@@ -61,10 +77,7 @@ D3D12RenderSystem::D3D12RenderSystem(const RenderSystemDescriptor& renderSystemD
     stagingBufferPool_.InitializeDevice(device_.GetNative(), 0);
     D3D12MipGenerator::Get().InitializeDevice(device_.GetNative());
     D3D12BufferConstantsPool::Get().InitializeDevice(device_.GetNative(), *commandContext_, *commandQueue_, stagingBufferPool_);
-
-    /* Initialize renderer information */
-    QueryRendererInfo();
-    QueryRenderingCaps();
+    D3D12BuiltinShaderFactory::Get().CreateBuiltinPSOs(device_.GetNative());
 }
 
 D3D12RenderSystem::~D3D12RenderSystem()
@@ -83,6 +96,7 @@ D3D12RenderSystem::~D3D12RenderSystem()
     /* Clear resources of singletons */
     D3D12MipGenerator::Get().Clear();
     D3D12BufferConstantsPool::Get().Clear();
+    D3D12BuiltinShaderFactory::Get().Clear();
 }
 
 /* ----- Swap-chain ----- */
@@ -174,7 +188,7 @@ void* D3D12RenderSystem::MapBuffer(Buffer& buffer, const CPUAccess access, std::
 void D3D12RenderSystem::UnmapBuffer(Buffer& buffer)
 {
     auto& bufferD3D = LLGL_CAST(D3D12Buffer&, buffer);
-    bufferD3D.Unmap(*commandContext_, *commandQueue_);
+    bufferD3D.Unmap(*commandContext_, *commandQueue_, stagingBufferPool_);
 }
 
 /* ----- Textures ----- */
@@ -376,12 +390,12 @@ void D3D12RenderSystem::Release(PipelineCache& pipelineCache)
 
 PipelineState* D3D12RenderSystem::CreatePipelineState(const GraphicsPipelineDescriptor& pipelineStateDesc, PipelineCache* pipelineCache)
 {
-    return pipelineStates_.emplace<D3D12GraphicsPSO>(device_, defaultPipelineLayout_, pipelineStateDesc, GetDefaultRenderPass(), pipelineCache);
+    return pipelineStates_.emplace<D3D12GraphicsPSO>(device_.GetNative(), defaultPipelineLayout_, pipelineStateDesc, GetDefaultRenderPass(), pipelineCache);
 }
 
 PipelineState* D3D12RenderSystem::CreatePipelineState(const ComputePipelineDescriptor& pipelineStateDesc, PipelineCache* pipelineCache)
 {
-    return pipelineStates_.emplace<D3D12ComputePSO>(device_, defaultPipelineLayout_, pipelineStateDesc, pipelineCache);
+    return pipelineStates_.emplace<D3D12ComputePSO>(device_.GetNative(), defaultPipelineLayout_, pipelineStateDesc, pipelineCache);
 }
 
 void D3D12RenderSystem::Release(PipelineState& pipelineState)
@@ -423,6 +437,8 @@ bool D3D12RenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHa
     if (nativeHandle != nullptr && nativeHandleSize == sizeof(Direct3D12::RenderSystemNativeHandle))
     {
         auto* nativeHandleD3D = reinterpret_cast<Direct3D12::RenderSystemNativeHandle*>(nativeHandle);
+        nativeHandleD3D->factory = factory_.Get();
+        nativeHandleD3D->factory->AddRef();
         nativeHandleD3D->device = device_.GetNative();
         nativeHandleD3D->device->AddRef();
         return true;
@@ -435,11 +451,21 @@ bool D3D12RenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHa
  * ======= Internal: =======
  */
 
-ComPtr<IDXGISwapChain1> D3D12RenderSystem::CreateDXSwapChain(const DXGI_SWAP_CHAIN_DESC1& swapChainDescDXGI, HWND wnd)
+ComPtr<IDXGISwapChain1> D3D12RenderSystem::CreateDXSwapChain(
+    const DXGI_SWAP_CHAIN_DESC1&    swapChainDescDXGI,
+    const void*                     nativeWindowHandle,
+    std::size_t                     nativeWindowHandleSize)
 {
+    LLGL_ASSERT(nativeWindowHandleSize == sizeof(NativeHandle));
+    auto* nativeWindowHandlePtr = reinterpret_cast<const NativeHandle*>(nativeWindowHandle);
+
     ComPtr<IDXGISwapChain1> swapChain;
 
-    HRESULT hr = factory_->CreateSwapChainForHwnd(commandQueue_->GetNative(), wnd, &swapChainDescDXGI, nullptr, nullptr, &swapChain);
+    #ifdef LLGL_OS_UWP
+    HRESULT hr = factory_->CreateSwapChainForCoreWindow(commandQueue_->GetNative(), nativeWindowHandlePtr->window, &swapChainDescDXGI, nullptr, &swapChain);
+    #else
+    HRESULT hr = factory_->CreateSwapChainForHwnd(commandQueue_->GetNative(), nativeWindowHandlePtr->window, &swapChainDescDXGI, nullptr, nullptr, &swapChain);
+    #endif
     DXThrowIfFailed(hr, "failed to create DXGI swap chain");
 
     return swapChain;
@@ -454,6 +480,15 @@ void D3D12RenderSystem::SyncGPU()
 /*
  * ======= Private: =======
  */
+
+bool D3D12RenderSystem::QueryRendererDetails(RendererInfo* outInfo, RenderingCapabilities* outCaps)
+{
+    if (outInfo != nullptr)
+        QueryRendererInfo(*outInfo);
+    if (outCaps != nullptr)
+        QueryRenderingCaps(*outCaps);
+    return true;
+}
 
 void D3D12RenderSystem::EnableDebugLayer()
 {
@@ -484,21 +519,37 @@ void D3D12RenderSystem::QueryVideoAdapters(long flags, ComPtr<IDXGIAdapter>& out
     videoAdatperInfo_ = DXGetVideoAdapterInfo(factory_.Get(), flags, outPreferredAdatper.ReleaseAndGetAddressOf());
 }
 
-HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter)
+HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter, bool isDebugLayerEnabled)
 {
-    std::vector<D3D_FEATURE_LEVEL> featureLevels = DXGetFeatureLevels(D3D_FEATURE_LEVEL_12_1);
+    const D3D_FEATURE_LEVEL featureLevels[] =
+    {
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 2
+        D3D_FEATURE_LEVEL_12_2,
+        #endif
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        D3D_FEATURE_LEVEL_12_1,
+        #endif
+        D3D_FEATURE_LEVEL_12_0,
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+        D3D_FEATURE_LEVEL_9_3,
+        D3D_FEATURE_LEVEL_9_2,
+        D3D_FEATURE_LEVEL_9_1,
+    };
     HRESULT hr = S_OK;
 
     if (preferredAdapter != nullptr)
     {
         /* Try to create device with perferred adatper */
-        hr = device_.CreateDXDevice(featureLevels, preferredAdapter);
+        hr = device_.CreateDXDevice(featureLevels, isDebugLayerEnabled, preferredAdapter);
         if (SUCCEEDED(hr))
             return hr;
     }
 
     /* Try to create device with default adapter */
-    hr = device_.CreateDXDevice(featureLevels);
+    hr = device_.CreateDXDevice(featureLevels, isDebugLayerEnabled);
     if (SUCCEEDED(hr))
     {
         /* Update video adapter info with default adapter */
@@ -509,90 +560,253 @@ HRESULT D3D12RenderSystem::CreateDevice(IDXGIAdapter* preferredAdapter)
     /* Use software adapter as fallback */
     ComPtr<IDXGIAdapter> adapter;
     factory_->EnumWarpAdapter(IID_PPV_ARGS(adapter.ReleaseAndGetAddressOf()));
-    return device_.CreateDXDevice(featureLevels, adapter.Get());
+    return device_.CreateDXDevice(featureLevels, isDebugLayerEnabled, adapter.Get());
 }
 
-static bool FindHighestShaderModel(ID3D12Device* device, D3D_SHADER_MODEL& shaderModel)
+HRESULT D3D12RenderSystem::QueryDXInterfacesFromNativeHandle(const Direct3D12::RenderSystemNativeHandle& nativeHandle)
+{
+    LLGL_ASSERT_PTR(nativeHandle.factory);
+    LLGL_ASSERT_PTR(nativeHandle.device);
+
+    factory_ = nativeHandle.factory;
+    const LUID adapterLUID = nativeHandle.device->GetAdapterLuid();
+
+    ComPtr<IDXGIAdapter> dxgiAdapter;
+    HRESULT hr = factory_->EnumAdapterByLuid(adapterLUID, IID_PPV_ARGS(&dxgiAdapter));
+    DXThrowIfFailed(hr, "failed to get adapter from DXGI factory");
+
+    DXGI_ADAPTER_DESC dxgiAdapterDesc;
+    hr = dxgiAdapter->GetDesc(&dxgiAdapterDesc);
+    DXThrowIfFailed(hr, "failed to get descriptor from DXGI adapter");
+
+    DXConvertVideoAdapterInfo(dxgiAdapter.Get(), dxgiAdapterDesc, videoAdatperInfo_);
+
+    return device_.ShareDXDevice(nativeHandle.device);
+}
+
+static D3D_SHADER_MODEL FindHighestShaderModel(ID3D12Device* device)
 {
     D3D12_FEATURE_DATA_SHADER_MODEL feature;
 
-    for (D3D_SHADER_MODEL model : { D3D_SHADER_MODEL_6_0, D3D_SHADER_MODEL_5_1 })
+    const D3D_SHADER_MODEL shaderModles[] =
+    {
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        D3D_SHADER_MODEL_6_7,
+        D3D_SHADER_MODEL_6_6,
+        D3D_SHADER_MODEL_6_5,
+        D3D_SHADER_MODEL_6_4,
+        D3D_SHADER_MODEL_6_3,
+        D3D_SHADER_MODEL_6_2,
+        D3D_SHADER_MODEL_6_1,
+        #endif
+        D3D_SHADER_MODEL_6_0,
+        D3D_SHADER_MODEL_5_1,
+    };
+
+    for (D3D_SHADER_MODEL model : shaderModles)
     {
         feature.HighestShaderModel = model;
         HRESULT hr = device->CheckFeatureSupport(D3D12_FEATURE_SHADER_MODEL, &feature, sizeof(feature));
         if (SUCCEEDED(hr))
-        {
-            shaderModel = model;
-            return true;
-        }
+            return model;
     }
 
-    return false;
+    return D3D_SHADER_MODEL_5_1;
 }
 
 static const char* DXShaderModelToString(D3D_SHADER_MODEL shaderModel)
 {
     switch (shaderModel)
     {
-        case D3D_SHADER_MODEL_5_1: return "5.1";
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        case D3D_SHADER_MODEL_6_7: return "6.7";
+        case D3D_SHADER_MODEL_6_6: return "6.6";
+        case D3D_SHADER_MODEL_6_5: return "6.5";
+        case D3D_SHADER_MODEL_6_4: return "6.4";
+        case D3D_SHADER_MODEL_6_3: return "6.3";
+        case D3D_SHADER_MODEL_6_2: return "6.2";
+        case D3D_SHADER_MODEL_6_1: return "6.1";
+        #endif
         case D3D_SHADER_MODEL_6_0: return "6.0";
+        case D3D_SHADER_MODEL_5_1: return "5.1";
     }
     return "";
 }
 
-void D3D12RenderSystem::QueryRendererInfo()
+static const char* DXFeatureLevelToVersion(D3D_FEATURE_LEVEL featureLevel)
 {
-    RendererInfo info;
+    #if LLGL_D3D12_ENABLE_FEATURELEVEL > 0
+    switch (featureLevel)
+    {
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 2
+        case D3D_FEATURE_LEVEL_12_2:    return "12.2";
+        #endif
+        #if LLGL_D3D12_ENABLE_FEATURELEVEL >= 1
+        case D3D_FEATURE_LEVEL_12_1:    return "12.1";
+        #endif
+        default:                        break;
+    }
+    #endif
+    return "12.0";
+}
 
+int D3D12RenderSystem::GetMinorVersion() const
+{
+    return 0;
+}
+
+void D3D12RenderSystem::QueryRendererInfo(RendererInfo& info)
+{
     /* Get D3D version */
     info.rendererName = "Direct3D " + std::string(DXFeatureLevelToVersion(GetFeatureLevel()));
 
     /* Get shading language support */
     info.shadingLanguageName = "HLSL ";
 
-    D3D_SHADER_MODEL shaderModel = D3D_SHADER_MODEL_5_1;
-    if (FindHighestShaderModel(device_.GetNative(), shaderModel))
-        info.shadingLanguageName += DXShaderModelToString(shaderModel);
-    else
-        info.shadingLanguageName += DXFeatureLevelToShaderModel(GetFeatureLevel());
+    const D3D_SHADER_MODEL shaderModel = FindHighestShaderModel(device_.GetNative());
+    info.shadingLanguageName += DXShaderModelToString(shaderModel);
 
     /* Get device and vendor name from adapter */
     info.deviceName = videoAdatperInfo_.name.c_str();
     info.vendorName = GetVendorName(videoAdatperInfo_.vendor);
-
-    SetRendererInfo(info);
 }
 
-void D3D12RenderSystem::QueryRenderingCaps()
+// Returns the HLSL version for the specified Direct3D feature level.
+static std::vector<ShadingLanguage> DXGetHLSLVersions(D3D_FEATURE_LEVEL featureLevel)
 {
-    RenderingCapabilities caps;
-    {
-        /* Query common DX rendering capabilities */
-        DXGetRenderingCaps(caps, GetFeatureLevel());
+    std::vector<ShadingLanguage> languages;
 
-        /* Set extended attributes */
-        caps.features.hasConservativeRasterization  = (GetFeatureLevel() >= D3D_FEATURE_LEVEL_12_0);
-        caps.features.hasTextureViewSwizzle         = true;
-        caps.features.hasPipelineCaching            = true;
+    languages.push_back(ShadingLanguage::HLSL);
+    languages.push_back(ShadingLanguage::HLSL_2_0);
 
-        caps.limits.maxViewports                    = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
-        caps.limits.maxViewportSize[0]              = D3D12_VIEWPORT_BOUNDS_MAX;
-        caps.limits.maxViewportSize[1]              = D3D12_VIEWPORT_BOUNDS_MAX;
-        caps.limits.maxBufferSize                   = ULLONG_MAX;
-        caps.limits.maxConstantBufferSize           = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_1 ) { languages.push_back(ShadingLanguage::HLSL_2_0a); }
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_2 ) { languages.push_back(ShadingLanguage::HLSL_2_0b); }
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_3 ) { languages.push_back(ShadingLanguage::HLSL_3_0);  }
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_0) { languages.push_back(ShadingLanguage::HLSL_4_0);  }
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_1) { languages.push_back(ShadingLanguage::HLSL_4_1);  }
+    if (featureLevel >= D3D_FEATURE_LEVEL_11_0) { languages.push_back(ShadingLanguage::HLSL_5_0);  }
+    if (featureLevel >= D3D_FEATURE_LEVEL_12_0) { languages.push_back(ShadingLanguage::HLSL_5_1);  }
 
-        /* Determine maximum number of samples for various formats */
-        caps.limits.maxColorBufferSamples           = device_.FindSuitableSampleDesc(DXGI_FORMAT_R8G8B8A8_UNORM).Count;
-        caps.limits.maxDepthBufferSamples           = device_.FindSuitableSampleDesc(DXGI_FORMAT_D32_FLOAT).Count;
-        caps.limits.maxStencilBufferSamples         = device_.FindSuitableSampleDesc(DXGI_FORMAT_D32_FLOAT_S8X24_UINT).Count;
-        caps.limits.maxNoAttachmentSamples          = D3D12_MAX_MULTISAMPLE_SAMPLE_COUNT;
-    }
-    SetRenderingCaps(caps);
+    return languages;
+}
+
+static std::vector<Format> GetDefaultSupportedDXTextureFormats()
+{
+    std::vector<Format> formats;
+
+    std::size_t numFormats = 0;
+    DXGetDefaultSupportedTextureFormats(nullptr, &numFormats);
+
+    formats.resize(numFormats, Format::Undefined);
+    DXGetDefaultSupportedTextureFormats(formats.data(), nullptr);
+
+    formats.insert(
+        formats.end(),
+        { Format::BC4UNorm, Format::BC4SNorm, Format::BC5UNorm, Format::BC5SNorm }
+    );
+
+    return formats;
+}
+
+static std::uint32_t GetMaxTextureDimension(D3D_FEATURE_LEVEL featureLevel)
+{
+    if (featureLevel >= D3D_FEATURE_LEVEL_11_0) return 16384; // D3D11_REQ_TEXTURE2D_U_OR_V_DIMENSION
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_0) return 8192;  // D3D10_REQ_TEXTURE2D_U_OR_V_DIMENSION
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_3 ) return 4096;
+    else                                        return 2048;
+}
+
+static std::uint32_t GetMaxCubeTextureDimension(D3D_FEATURE_LEVEL featureLevel)
+{
+    if (featureLevel >= D3D_FEATURE_LEVEL_11_0) return 16384; // D3D11_REQ_TEXTURECUBE_DIMENSION
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_0) return 8192;  // D3D10_REQ_TEXTURECUBE_DIMENSION
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_3 ) return 4096;
+    else                                        return 512;
+}
+
+static std::uint32_t GetMaxRenderTargets(D3D_FEATURE_LEVEL featureLevel)
+{
+    if (featureLevel >= D3D_FEATURE_LEVEL_10_0) return 8;
+    if (featureLevel >= D3D_FEATURE_LEVEL_9_3 ) return 4;
+    else                                        return 1;
+}
+
+void D3D12RenderSystem::QueryRenderingCaps(RenderingCapabilities& caps)
+{
+    const D3D_FEATURE_LEVEL featureLevel = GetFeatureLevel();
+    //const int minorVersion = GetMinorVersion();
+
+    const std::uint32_t maxThreadGroups = 65535u;
+
+    /* Query common attributes */
+    caps.screenOrigin                               = ScreenOrigin::UpperLeft;
+    caps.clippingRange                              = ClippingRange::ZeroToOne;
+    caps.shadingLanguages                           = DXGetHLSLVersions(featureLevel);
+    caps.textureFormats                             = GetDefaultSupportedDXTextureFormats();
+
+    caps.features.hasRenderTargets                  = true;
+    caps.features.has3DTextures                     = true;
+    caps.features.hasCubeTextures                   = true;
+    caps.features.hasArrayTextures                  = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasCubeArrayTextures              = (featureLevel >= D3D_FEATURE_LEVEL_10_1);
+    caps.features.hasMultiSampleTextures            = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasMultiSampleArrayTextures       = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasTextureViews                   = true;
+    caps.features.hasTextureViewSwizzle             = true;
+    caps.features.hasBufferViews                    = true;
+    caps.features.hasConstantBuffers                = true;
+    caps.features.hasStorageBuffers                 = true;
+    caps.features.hasGeometryShaders                = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasTessellationShaders            = (featureLevel >= D3D_FEATURE_LEVEL_11_0);
+    caps.features.hasTessellatorStage               = (featureLevel >= D3D_FEATURE_LEVEL_11_0);
+    caps.features.hasComputeShaders                 = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasInstancing                     = (featureLevel >= D3D_FEATURE_LEVEL_9_3);
+    caps.features.hasOffsetInstancing               = (featureLevel >= D3D_FEATURE_LEVEL_9_3);
+    caps.features.hasIndirectDrawing                = (featureLevel >= D3D_FEATURE_LEVEL_10_0);//???
+    caps.features.hasViewportArrays                 = true;
+    caps.features.hasConservativeRasterization      = (GetFeatureLevel() >= D3D_FEATURE_LEVEL_12_0);
+    caps.features.hasStreamOutputs                  = (featureLevel >= D3D_FEATURE_LEVEL_10_0);
+    caps.features.hasLogicOp                        = (featureLevel >= D3D_FEATURE_LEVEL_11_1);
+    caps.features.hasPipelineCaching                = true;
+    caps.features.hasPipelineStatistics             = true;
+    caps.features.hasRenderCondition                = true;
+
+    /* Query limits */
+    caps.limits.lineWidthRange[0]                   = 1.0f;
+    caps.limits.lineWidthRange[1]                   = 1.0f;
+    caps.limits.maxTextureArrayLayers               = (featureLevel >= D3D_FEATURE_LEVEL_10_0 ? 2048u : 256u);
+    caps.limits.maxColorAttachments                 = GetMaxRenderTargets(featureLevel);
+    caps.limits.maxPatchVertices                    = 32u;
+    caps.limits.max1DTextureSize                    = GetMaxTextureDimension(featureLevel);
+    caps.limits.max2DTextureSize                    = GetMaxTextureDimension(featureLevel);
+    caps.limits.max3DTextureSize                    = (featureLevel >= D3D_FEATURE_LEVEL_10_0 ? 2048u : 256u);
+    caps.limits.maxCubeTextureSize                  = GetMaxCubeTextureDimension(featureLevel);
+    caps.limits.maxAnisotropy                       = (featureLevel >= D3D_FEATURE_LEVEL_9_2 ? 16u : 2u);
+    caps.limits.maxComputeShaderWorkGroups[0]       = maxThreadGroups;
+    caps.limits.maxComputeShaderWorkGroups[1]       = maxThreadGroups;
+    caps.limits.maxComputeShaderWorkGroups[2]       = (featureLevel >= D3D_FEATURE_LEVEL_11_0 ? maxThreadGroups : 1u);
+    caps.limits.maxComputeShaderWorkGroupSize[0]    = 1024u;
+    caps.limits.maxComputeShaderWorkGroupSize[1]    = 1024u;
+    caps.limits.maxComputeShaderWorkGroupSize[2]    = 1024u;
+    caps.limits.maxViewports                        = D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE;
+    caps.limits.maxViewportSize[0]                  = D3D12_VIEWPORT_BOUNDS_MAX;
+    caps.limits.maxViewportSize[1]                  = D3D12_VIEWPORT_BOUNDS_MAX;
+    caps.limits.maxBufferSize                       = ULLONG_MAX;
+    caps.limits.maxConstantBufferSize               = D3D12_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 16;
+    caps.limits.maxStreamOutputs                    = 4u;
+    caps.limits.maxTessFactor                       = 64u;
+    caps.limits.minConstantBufferAlignment          = 256u;
+    caps.limits.minSampledBufferAlignment           = 32u;
+    caps.limits.minStorageBufferAlignment           = 32u;
+    caps.limits.maxColorBufferSamples               = device_.FindSuitableSampleDesc(DXGI_FORMAT_R8G8B8A8_UNORM).Count;
+    caps.limits.maxDepthBufferSamples               = device_.FindSuitableSampleDesc(DXGI_FORMAT_D32_FLOAT).Count;
+    caps.limits.maxStencilBufferSamples             = device_.FindSuitableSampleDesc(DXGI_FORMAT_D32_FLOAT_S8X24_UINT).Count;
+    caps.limits.maxNoAttachmentSamples              = D3D12_MAX_MULTISAMPLE_SAMPLE_COUNT;
 }
 
 void D3D12RenderSystem::ExecuteCommandListAndSync()
 {
-    commandContext_->FinishAndSync(*commandQueue_);
+    commandQueue_->FinishAndSubmitCommandContext(*commandContext_, true);
 }
 
 void D3D12RenderSystem::UpdateBufferAndSync(
@@ -611,7 +825,7 @@ void* D3D12RenderSystem::MapBufferRange(D3D12Buffer& bufferD3D, const CPUAccess 
     void* mappedData = nullptr;
     const D3D12_RANGE range{ static_cast<SIZE_T>(offset), static_cast<SIZE_T>(offset + length) };
 
-    if (SUCCEEDED(bufferD3D.Map(*commandContext_, *commandQueue_, range, &mappedData, access)))
+    if (SUCCEEDED(bufferD3D.Map(*commandContext_, *commandQueue_, stagingBufferPool_, range, &mappedData, access)))
         return mappedData;
 
     return nullptr;
@@ -687,6 +901,21 @@ const D3D12RenderPass* D3D12RenderSystem::GetDefaultRenderPass() const
             return LLGL_CAST(const D3D12RenderPass*, renderPass);
     }
     return nullptr;
+}
+
+bool D3D12RenderSystem::CheckFactoryFeatureSupport(DXGI_FEATURE feature) const
+{
+    ComPtr<IDXGIFactory5> factory5;
+    HRESULT hr = factory_->QueryInterface(IID_PPV_ARGS(&factory5));
+
+    if (SUCCEEDED(hr))
+    {
+        BOOL supported = FALSE;
+        hr = factory5->CheckFeatureSupport(feature, &supported, sizeof(supported));
+        return (SUCCEEDED(hr) && supported != FALSE);
+    }
+
+    return false;
 }
 
 

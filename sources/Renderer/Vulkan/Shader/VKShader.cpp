@@ -9,16 +9,19 @@
 #include "VKShaderModulePool.h"
 #include "../VKCore.h"
 #include "../VKTypes.h"
+#include "../../ResourceUtils.h"
 #include "../../../Core/CoreUtils.h"
 #include "../../../Core/StringUtils.h"
 #include "../../../Core/ReportUtils.h"
+#include "../../../Core/Assertion.h"
 #include "../../PipelineStateUtils.h"
 #include <LLGL/Utils/TypeNames.h>
 #include <LLGL/Utils/ForRange.h>
 #include <string.h>
 #include <algorithm>
+#include <set>
 
-#ifdef LLGL_ENABLE_SPIRV_REFLECT
+#if LLGL_VK_ENABLE_SPIRV_REFLECT
 #   include "../../SPIRV/SpirvReflect.h"
 #endif
 
@@ -169,7 +172,7 @@ static long ShaderTypeToStageFlags(const ShaderType type)
     }
 }
 
-#ifdef LLGL_ENABLE_SPIRV_REFLECT
+#if LLGL_VK_ENABLE_SPIRV_REFLECT
 
 static Format SpvVectorTypeToFormat(const SpirvReflect::SpvType* type, std::uint32_t count)
 {
@@ -378,6 +381,38 @@ static ShaderResourceReflection* FindOrAppendShaderResource(ShaderReflection& re
     return &(reflection.resources.back());
 }
 
+static UniformType ReflectUniformType(const SpirvReflect::SpvType* type)
+{
+    if (type != nullptr)
+    {
+        switch (type->opcode)
+        {
+            case spv::OpTypeArray:
+                /* Just dereference type since array elements are handled outside this function */
+                return ReflectUniformType(type->baseType);
+
+            case spv::OpTypeMatrix:
+                return MakeUniformMatrixType(ReflectUniformType(type->baseType), type->elements);
+
+            case spv::OpTypeVector:
+                return MakeUniformVectorType(ReflectUniformType(type->baseType), type->elements);
+
+            case spv::OpTypeFloat:
+                return (type->size == 2 ? UniformType::Double1 : UniformType::Float1);
+
+            case spv::OpTypeInt:
+                return (type->sign ? UniformType::Int1 : UniformType::UInt1);
+
+            case spv::OpTypeBool:
+                return UniformType::Bool1;
+
+            default:
+                break;
+        }
+    }
+    return UniformType::Undefined;
+}
+
 bool VKShader::Reflect(ShaderReflection& reflection) const
 {
     /* Parse shader module */
@@ -435,7 +470,26 @@ bool VKShader::Reflect(ShaderReflection& reflection) const
     }
 
     /* Gather push constants */
-    //TODO
+    if (const SpirvReflect::SpvType* pushConstantType = spvReflect.GetPushConstantStructType())
+    {
+        reflection.uniforms.reserve(reflection.uniforms.size() + pushConstantType->fieldTypes.size());
+        if (pushConstantType->fieldTypes.size() == pushConstantType->fieldNames.size())
+        {
+            for_range(i, pushConstantType->fieldTypes.size())
+            {
+                const SpirvReflect::SpvType* fieldType = pushConstantType->fieldTypes[i];
+                const char* fieldName = pushConstantType->fieldNames[i];
+
+                UniformDescriptor uniformDesc;
+                {
+                    uniformDesc.name        = fieldName;
+                    uniformDesc.type        = ReflectUniformType(fieldType);
+                    uniformDesc.arraySize   = (fieldType->opcode == spv::OpTypeArray ? fieldType->elements : 0);
+                }
+                reflection.uniforms.push_back(uniformDesc);
+            }
+        }
+    }
 
     return true;
 }
@@ -492,7 +546,7 @@ bool VKShader::ReflectPushConstants(
     return true;
 }
 
-#else // LLGL_ENABLE_SPIRV_REFLECT
+#else // LLGL_VK_ENABLE_SPIRV_REFLECT
 
 bool VKShader::Reflect(ShaderReflection& /*reflection*/) const
 {
@@ -511,7 +565,7 @@ bool VKShader::ReflectPushConstants(
     return false; // dummy
 }
 
-#endif // /LLGL_ENABLE_SPIRV_REFLECT
+#endif // /LLGL_VK_ENABLE_SPIRV_REFLECT
 
 
 /*
@@ -544,17 +598,15 @@ void VKShader::BuildInputLayout(std::size_t numVertexAttribs, const VertexAttrib
 
     std::set<VkVertexInputBindingDescription, VKCompareVertexBindingDesc> bindingDescSet;
 
-    for (std::size_t i = 0; i < numVertexAttribs; ++i)
+    for_range(i, numVertexAttribs)
     {
         const VertexAttribute& attr = vertexAttribs[i];
 
-        if (attr.instanceDivisor > 1)
-        {
-            throw std::runtime_error(
-                "vertex instance divisor must be 0 or 1 for Vulkan, but " +
-                std::to_string(attr.instanceDivisor) + " was specified: " + std::string(attr.name.c_str())
-            );
-        }
+        LLGL_ASSERT(
+            !(attr.instanceDivisor > 1),
+            "vertex instance divisor must be 0 or 1 for Vulkan, but %u was specified: %s",
+            attr.instanceDivisor, attr.name.c_str()
+        );
 
         /* Append vertex input attribute descriptor */
         VkVertexInputAttributeDescription vertexAttrib;

@@ -9,7 +9,7 @@
 #define LLGL_GL_STATE_H
 
 
-#include "../GLProfile.h"
+#include "../Profile/GLProfile.h"
 
 
 namespace LLGL
@@ -18,6 +18,7 @@ namespace LLGL
 
 class GLPipelineLayout;
 class GLPipelineState;
+class GLBufferWithXFB;
 
 /* ----- Enumerations ----- */
 
@@ -26,6 +27,8 @@ enum class GLState
 {
     Blend = 0,                  // GL_BLEND
     CullFace,                   // GL_CULL_FACE
+    DebugOutput,                // GL_DEBUG_OUTPUT
+    DebugOutputSynchronous,     // GL_DEBUG_OUTPUT_SYNCHRONOUS
     DepthTest,                  // GL_DEPTH_TEST
     Dither,                     // GL_DITHER
     PolygonOffsetFill,          // GL_POLYGON_OFFSET_FILL
@@ -36,12 +39,10 @@ enum class GLState
     ScissorTest,                // GL_SCISSOR_TEST
     StencilTest,                // GL_STENCIL_TEST
 
-    #ifdef LLGL_OPENGL
+    #if LLGL_OPENGL
 
     ColorLogicOp,               // GL_COLOR_LOGIC_OP
     DepthClamp,                 // GL_DEPTH_CLAMP
-    DebugOutput,                // GL_DEBUG_OUTPUT
-    DebugOutputSynchronous,     // GL_DEBUG_OUTPUT_SYNCHRONOUS
     FramebufferSRGB,            // GL_FRAMEBUFFER_SRGB
     LineSmooth,                 // GL_LINE_SMOOTH
     Multisample,                // GL_MULTISAMPLE
@@ -74,7 +75,7 @@ enum class GLStateExt
 enum class GLBufferTarget
 {
     ArrayBuffer = 0,            // GL_ARRAY_BUFFER
-    AtomicCounterBuffer,        // GL_ATOMIC_COUNTER_BUFFER
+    AtomicCounterBuffer,        // GL_ATOMIC_COUNTER_BUFFER (unused)
     CopyReadBuffer,             // GL_COPY_READ_BUFFER
     CopyWriteBuffer,            // GL_COPY_WRITE_BUFFER
     DispatchIndirectBuffer,     // GL_DISPATCH_INDIRECT_BUFFER
@@ -82,7 +83,7 @@ enum class GLBufferTarget
     ElementArrayBuffer,         // GL_ELEMENT_ARRAY_BUFFER
     PixelPackBuffer,            // GL_PIXEL_PACK_BUFFER
     PixelUnpackBuffer,          // GL_PIXEL_UNPACK_BUFFER
-    QueryBuffer,                // GL_QUERY_BUFFER
+    QueryBuffer,                // GL_QUERY_BUFFER (unused)
     ShaderStorageBuffer,        // GL_SHADER_STORAGE_BUFFER
     TextureBuffer,              // GL_TEXTURE_BUFFER
     TransformFeedbackBuffer,    // GL_TRANSFORM_FEEDBACK_BUFFER
@@ -147,13 +148,16 @@ struct GLScissor
 
 struct GLRenderState
 {
-    GLenum                  drawMode            = GL_TRIANGLES;
-    GLenum                  primitiveMode       = GL_TRIANGLES;
-    GLenum                  indexBufferDataType = GL_UNSIGNED_INT;
-    GLsizeiptr              indexBufferStride   = 4;
-    GLsizeiptr              indexBufferOffset   = 0;
-    const GLPipelineLayout* boundPipelineLayout = nullptr;
-    const GLPipelineState*  boundPipelineState  = nullptr;
+    GLenum                  drawMode                = GL_TRIANGLES;
+    GLenum                  primitiveMode           = GL_TRIANGLES;
+    GLenum                  indexBufferDataType     = GL_UNSIGNED_INT;
+    GLsizeiptr              indexBufferStride       = 4;
+    GLsizeiptr              indexBufferOffset       = 0;
+    const GLPipelineLayout* boundPipelineLayout     = nullptr;
+    const GLPipelineState*  boundPipelineState      = nullptr;
+    GLBufferWithXFB*        boundBufferWithFxb      = nullptr;
+    GLbitfield              activeBarriers          = 0;
+    GLbitfield              dirtyBarriers           = 0;
 };
 
 struct GLPixelStore
@@ -163,12 +167,12 @@ struct GLPixelStore
     GLint alignment     = 4; // Must be 1, 2, 4, or 8
 };
 
-struct GLImageUnit
+/*struct GLImageUnit
 {
     GLuint  texture = 0;
     GLenum  format  = 0;
     GLenum  access  = 0;
-};
+};*/
 
 
 } // /namespace LLGL

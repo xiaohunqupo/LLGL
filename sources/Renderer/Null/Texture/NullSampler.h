@@ -22,7 +22,11 @@ class NullSampler final : public Sampler
 
     public:
 
-        void SetName(const char* name) override;
+        #include <LLGL/Backend/Sampler.inl>
+
+    public:
+
+        void SetDebugName(const char* name) override;
 
     public:
 

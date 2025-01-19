@@ -33,14 +33,22 @@ NullBuffer::NullBuffer(const BufferDescriptor& desc, const void* initialData) :
     /* Initialize buffer with initial data */
     if (initialData != nullptr)
         Write(0, initialData, static_cast<std::size_t>(desc.size));
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
-void NullBuffer::SetName(const char* name)
+void NullBuffer::SetDebugName(const char* name)
 {
     if (name != nullptr)
         label_ = name;
     else
         label_.clear();
+}
+
+bool NullBuffer::GetNativeHandle(void* /*nativeHandle*/, std::size_t /*nativeHandleSize*/)
+{
+    return false; // dummy
 }
 
 BufferDescriptor NullBuffer::GetDesc() const

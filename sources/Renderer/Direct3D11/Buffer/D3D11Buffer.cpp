@@ -11,8 +11,9 @@
 #include "../D3D11ObjectUtils.h"
 #include "../../ResourceUtils.h"
 #include "../../DXCommon/DXCore.h"
-#include "../../../Core/CoreUtils.h"
 #include "../../../Core/Assertion.h"
+#include "../../../Core/CoreUtils.h"
+#include <LLGL/Backend/Direct3D11/NativeHandle.h>
 
 
 namespace LLGL
@@ -26,14 +27,30 @@ static bool NeedsIntermediateCpuAccessBuffer(const BufferDescriptor& desc)
 }
 
 D3D11Buffer::D3D11Buffer(ID3D11Device* device, const BufferDescriptor& desc, const void* initialData) :
-    Buffer { desc.bindFlags }
+    Buffer          { desc.bindFlags                       },
+    bindingLocator_ { ResourceType::Buffer, desc.bindFlags }
 {
     CreateGpuBuffer(device, desc, initialData);
+
     if (NeedsIntermediateCpuAccessBuffer(desc))
         CreateCpuAccessBuffer(device, DXGetCPUAccessFlags(desc.cpuAccessFlags), desc.stride);
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
-void D3D11Buffer::SetName(const char* name)
+bool D3D11Buffer::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    if (auto* nativeHandleD3D = GetTypedNativeHandle<Direct3D11::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
+    {
+        nativeHandleD3D->deviceChild = buffer_.Get();
+        nativeHandleD3D->deviceChild->AddRef();
+        return true;
+    }
+    return false;
+}
+
+void D3D11Buffer::SetDebugName(const char* name)
 {
     D3D11SetObjectName(GetNative(), name);
     if (cpuAccessBuffer_)

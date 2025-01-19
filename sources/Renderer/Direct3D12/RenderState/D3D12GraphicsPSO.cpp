@@ -33,7 +33,7 @@ namespace LLGL
 
 // see https://msdn.microsoft.com/en-us/library/windows/desktop/dn770370(v=vs.85).aspx
 D3D12GraphicsPSO::D3D12GraphicsPSO(
-    D3D12Device&                        device,
+    ID3D12Device*                       device,
     D3D12PipelineLayout&                defaultPipelineLayout,
     const GraphicsPipelineDescriptor&   desc,
     const D3D12RenderPass*              defaultRenderPass,
@@ -43,7 +43,10 @@ D3D12GraphicsPSO::D3D12GraphicsPSO(
 {
     /* Validate pointers and get D3D shader program */
     if (desc.vertexShader == nullptr)
-        throw std::invalid_argument("cannot create D3D graphics pipeline without vertex shader");
+    {
+        ResetReport("cannot create D3D graphics PSO without vertex shader", true);
+        return;
+    }
 
     /* Use either default render pass or from descriptor */
     const D3D12RenderPass* renderPassD3D = nullptr;
@@ -84,6 +87,9 @@ D3D12GraphicsPSO::D3D12GraphicsPSO(
     }
     else
         CreateNativePSO(device, *pipelineLayoutD3D, renderPassD3D, desc);
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
 void D3D12GraphicsPSO::Bind(D3D12CommandContext& commandContext)
@@ -355,11 +361,13 @@ static D3D12_INPUT_LAYOUT_DESC GetD3DInputLayoutDesc(const Shader* vs)
     return desc;
 }
 
-static D3D12_STREAM_OUTPUT_DESC GetD3DStreamOutputDesc(const Shader* vs, const Shader* gs)
+static D3D12_STREAM_OUTPUT_DESC GetD3DStreamOutputDesc(const Shader* vs, const Shader* ds, const Shader* gs)
 {
     D3D12_STREAM_OUTPUT_DESC desc = {};
     if (gs != nullptr)
         LLGL_CAST(const D3D12Shader*, gs)->GetStreamOutputDesc(desc);
+    else if (ds != nullptr)
+        LLGL_CAST(const D3D12Shader*, ds)->GetStreamOutputDesc(desc);
     else if (vs != nullptr)
         LLGL_CAST(const D3D12Shader*, vs)->GetStreamOutputDesc(desc);
     return desc;
@@ -371,7 +379,7 @@ static D3D12_INDEX_BUFFER_STRIP_CUT_VALUE GetIndexFormatStripCutValue(Format for
 }
 
 void D3D12GraphicsPSO::CreateNativePSO(
-    D3D12Device&                        device,
+    ID3D12Device*                       device,
     const D3D12PipelineLayout&          pipelineLayout,
     const D3D12RenderPass*              renderPass,
     const GraphicsPipelineDescriptor&   desc,
@@ -412,13 +420,17 @@ void D3D12GraphicsPSO::CreateNativePSO(
     /* Convert other states */
     const bool isStripTopology = IsPrimitiveTopologyStrip(desc.primitiveTopology);
     stateDesc.InputLayout           = GetD3DInputLayoutDesc(desc.vertexShader);
-    stateDesc.StreamOutput          = GetD3DStreamOutputDesc(desc.vertexShader, desc.geometryShader);
+    stateDesc.StreamOutput          = GetD3DStreamOutputDesc(desc.vertexShader, desc.tessEvaluationShader, desc.geometryShader);
     stateDesc.IBStripCutValue       = (isStripTopology ? GetIndexFormatStripCutValue(desc.indexFormat) : D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_DISABLED);
     stateDesc.PrimitiveTopologyType = GetPrimitiveToplogyType(desc.primitiveTopology);
     stateDesc.SampleMask            = desc.blend.sampleMask;
     stateDesc.NumRenderTargets      = numAttachments;
     stateDesc.SampleDesc.Count      = (renderPass != nullptr ? renderPass->GetSampleDesc().Count : 1);
     stateDesc.SampleDesc.Quality    = 0;
+
+    /* If rasterizer stage is discarded, don't sent stream-output data to the rasterizer */
+    if (desc.rasterizer.discardEnabled)
+        stateDesc.StreamOutput.RasterizedStream = D3D12_SO_NO_RASTERIZED_STREAM;
 
     /* Set PSO cache if specified */
     if (pipelineCache != nullptr)
@@ -430,17 +442,29 @@ void D3D12GraphicsPSO::CreateNativePSO(
     if (isStripTopology && desc.indexFormat == Format::Undefined)
     {
         /* Create primary PSO with 32-bit index cut off value */
-        primaryPSO = device.CreateDXGraphicsPipelineState(stateDesc);
+        primaryPSO = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
 
         /* Create secondary PSO with 16-bit index cut off value */
         stateDesc.IBStripCutValue   = D3D12_INDEX_BUFFER_STRIP_CUT_VALUE_0xFFFF;
         stateDesc.CachedPSO         = {};
-        secondaryPSO_ = device.CreateDXGraphicsPipelineState(stateDesc);
+        secondaryPSO_ = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
     }
     else
-        primaryPSO = device.CreateDXGraphicsPipelineState(stateDesc);
+        primaryPSO = CreateNativePSOWithDesc(device, stateDesc, desc.debugName);
 
     SetNativeAndUpdateCache(std::move(primaryPSO), pipelineCache);
+}
+
+ComPtr<ID3D12PipelineState> D3D12GraphicsPSO::CreateNativePSOWithDesc(ID3D12Device* device, const D3D12_GRAPHICS_PIPELINE_STATE_DESC& desc, const char* debugName)
+{
+    ComPtr<ID3D12PipelineState> pipelineState;
+    HRESULT hr = device->CreateGraphicsPipelineState(&desc, IID_PPV_ARGS(pipelineState.ReleaseAndGetAddressOf()));
+    if (FAILED(hr))
+    {
+        GetMutableReport().Errorf("Failed to create D3D12 graphics pipeline state [%s] (HRESULT = %s)\n", GetOptionalDebugName(debugName), DXErrorToStrOrHex(hr));
+        return nullptr;
+    }
+    return pipelineState;
 }
 
 // Returns the size (in bytes) for the static-state buffer with the specified number of viewports and scissor rectangles
@@ -453,7 +477,7 @@ void D3D12GraphicsPSO::BuildStaticStateBuffer(const GraphicsPipelineDescriptor& 
 {
     /* Allocate packed raw buffer */
     const std::size_t bufferSize = GetStaticStateBufferSize(desc.viewports.size(), desc.scissors.size());
-    staticStateBuffer_ = MakeUniqueArray<char>(bufferSize);
+    staticStateBuffer_ = DynamicByteArray{ bufferSize };
 
     ByteBufferIterator byteBufferIter{ staticStateBuffer_.get() };
 
@@ -473,10 +497,11 @@ void D3D12GraphicsPSO::BuildStaticViewports(std::size_t numViewports, const View
 
     if (numStaticViewports_ > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
     {
-        throw std::invalid_argument(
-            "too many viewports in graphics pipeline state (" + std::to_string(numStaticViewports_) +
-            " specified, but limit is " + std::to_string(D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE) + ")"
+        GetMutableReport().Errorf(
+            "too many viewports in graphics pipeline state; %u specified, but limit is %d",
+            numStaticViewports_, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
         );
+        return;
     }
 
     /* Build <D3D12_VIEWPORT> entries */
@@ -501,10 +526,11 @@ void D3D12GraphicsPSO::BuildStaticScissors(std::size_t numScissors, const Scisso
 
     if (numStaticScissors_ > D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE)
     {
-        throw std::invalid_argument(
-            "too many viewports in graphics pipeline state (" + std::to_string(numStaticScissors_) +
-            " specified, but limit is " + std::to_string(D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE) + ")"
+        GetMutableReport().Errorf(
+            "too many scissors in graphics pipeline state; %u specified, but limit is %d",
+            numStaticScissors_, D3D12_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE
         );
+        return;
     }
 
     /* Build <D3D12_RECT> entries */

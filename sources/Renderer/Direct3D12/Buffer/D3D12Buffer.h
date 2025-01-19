@@ -11,7 +11,9 @@
 
 #include <LLGL/Buffer.h>
 #include <LLGL/RenderSystemFlags.h>
+#include <LLGL/Container/DynamicArray.h>
 #include "../D3D12Resource.h"
+#include "D3D12StagingBufferPool.h"
 #include "../../DXCommon/ComPtr.h"
 #include <d3d12.h>
 
@@ -29,9 +31,11 @@ class D3D12Buffer : public Buffer
 
     public:
 
-        void SetName(const char* name) override;
+        #include <LLGL/Backend/Buffer.inl>
 
-        BufferDescriptor GetDesc() const override;
+    public:
+
+        void SetDebugName(const char* name) override;
 
     public:
 
@@ -64,15 +68,17 @@ class D3D12Buffer : public Buffer
         HRESULT Map(
             D3D12CommandContext&    commandContext,
             D3D12CommandQueue&      commandQueue,
+            D3D12StagingBufferPool& stagingBufferPool,
             const D3D12_RANGE&      range,
             void**                  mappedData,
-            const CPUAccess         access
+            CPUAccess               access
         );
 
         // Unmaps the buffer content from CPU memory space.
         void Unmap(
             D3D12CommandContext&    commandContext,
-            D3D12CommandQueue&      commandQueue
+            D3D12CommandQueue&      commandQueue,
+            D3D12StagingBufferPool& stagingBufferPool
         );
 
         // Returns the resource wrapper.
@@ -97,6 +103,12 @@ class D3D12Buffer : public Buffer
         inline UINT64 GetBufferSize() const
         {
             return bufferSize_;
+        }
+
+        // Returns the offset within this buffer to the steam-output counter.
+        inline UINT64 GetStreamOutputCounterOffset() const
+        {
+            return GetBufferSize();
         }
 
         // Returns the internal buffer size: original size plus meta data (like stream-output size).
@@ -124,9 +136,15 @@ class D3D12Buffer : public Buffer
         }
 
         // Returns the memory alignment required for this buffer.
-        inline UINT64 GetAlignment() const
+        inline UINT GetAlignment() const
         {
             return alignment_;
+        }
+
+        // Returns the stride for this buffer. Used for structured, typed, vertex, and stream-output buffers.
+        inline UINT GetStride() const
+        {
+            return stride_;
         }
 
         // Returns the native format of the buffer or DXGI_FORMAT_UNKNOWN; only used for storage buffers.
@@ -138,7 +156,6 @@ class D3D12Buffer : public Buffer
     private:
 
         void CreateGpuBuffer(ID3D12Device* device, const BufferDescriptor& desc);
-        void CreateCpuAccessBuffer(ID3D12Device* device, long cpuAccessFlags);
 
         void CreateIntermediateUAVDescriptorHeap(ID3D12Resource* resource, DXGI_FORMAT format, UINT formatStride);
         void CreateIntermediateUAVBuffer();
@@ -192,24 +209,24 @@ class D3D12Buffer : public Buffer
 
     private:
 
-        D3D12Resource                   resource_;
-        D3D12Resource                   cpuAccessBuffer_; // D3D12_HEAP_TYPE_UPLOAD or D3D12_HEAP_TYPE_READBACK
+        D3D12Resource                           resource_;
 
-        ComPtr<ID3D12DescriptorHeap>    uavIntermediateDescHeap_;
-        D3D12Resource                   uavIntermediateBuffer_;
+        ComPtr<ID3D12DescriptorHeap>            uavIntermediateDescHeap_;
+        D3D12Resource                           uavIntermediateBuffer_;
 
-        UINT64                          bufferSize_                 = 0;
-        UINT64                          internalSize_               = 0;
-        UINT                            alignment_                  = 1;
-        UINT                            stride_                     = 1;
-        DXGI_FORMAT                     format_                     = DXGI_FORMAT_UNKNOWN;
+        UINT64                                  bufferSize_                 = 0;
+        UINT64                                  internalSize_               = 0;
+        UINT                                    alignment_                  = 1;
+        UINT                                    stride_                     = 1;
+        DXGI_FORMAT                             format_                     = DXGI_FORMAT_UNKNOWN;
 
-        D3D12_VERTEX_BUFFER_VIEW        vertexBufferView_           = {};
-        D3D12_INDEX_BUFFER_VIEW         indexBufferView_            = {};
-        D3D12_STREAM_OUTPUT_BUFFER_VIEW soBufferView_               = {};
+        D3D12_VERTEX_BUFFER_VIEW                vertexBufferView_           = {};
+        D3D12_INDEX_BUFFER_VIEW                 indexBufferView_            = {};
+        D3D12_STREAM_OUTPUT_BUFFER_VIEW         soBufferView_               = {};
 
-        D3D12_RANGE                     mappedRange_                = {};
-        CPUAccess                       mappedCPUaccess_            = CPUAccess::ReadOnly;
+        D3D12_RANGE                             mappedRange_                = {};
+        CPUAccess                               mappedCPUaccess_            = CPUAccess::ReadOnly;
+        D3D12StagingBufferPool::MapBufferTicket mappedBufferTicket_;
 
 };
 

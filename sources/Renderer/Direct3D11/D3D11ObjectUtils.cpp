@@ -5,6 +5,7 @@
  * Licensed under the terms of the BSD 3-Clause license (see LICENSE.txt).
  */
 
+#include <initguid.h> // Comes first to define GUIDs
 #include "D3D11ObjectUtils.h"
 #include <string>
 #include <cstring>
@@ -14,20 +15,17 @@ namespace LLGL
 {
 
 
-// Declare custom object of "WKPDID_D3DDebugObjectName" as defined in <d3dcommon.h> to avoid linking with "dxguid.lib"
-static const GUID g_WKPDID_D3DDebugObjectName = { 0x429b8c22, 0x9188, 0x4b0c, { 0x87,0x42,0xac,0xb0,0xbf,0x85,0xc2,0x00 } };
-
 void D3D11SetObjectName(ID3D11DeviceChild* obj, const char* name)
 {
     if (obj != nullptr)
     {
         if (name != nullptr)
         {
-            const std::size_t length = std::strlen(name);
-            obj->SetPrivateData(g_WKPDID_D3DDebugObjectName, static_cast<UINT>(length), name);
+            const std::size_t nameLen = std::strlen(name);
+            obj->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(nameLen), name);
         }
         else
-            obj->SetPrivateData(g_WKPDID_D3DDebugObjectName, 0, nullptr);
+            obj->SetPrivateData(WKPDID_D3DDebugObjectName, 0, nullptr);
     }
 }
 
@@ -39,11 +37,11 @@ void D3D11SetObjectNameSubscript(ID3D11DeviceChild* obj, const char* name, const
         {
             std::string nameWithSubscript = name;
             nameWithSubscript += subscript;
-            const std::size_t length = nameWithSubscript.size();
-            obj->SetPrivateData(g_WKPDID_D3DDebugObjectName, static_cast<UINT>(length), nameWithSubscript.c_str());
+            const std::size_t nameLen = nameWithSubscript.size();
+            obj->SetPrivateData(WKPDID_D3DDebugObjectName, static_cast<UINT>(nameLen), nameWithSubscript.c_str());
         }
         else
-            obj->SetPrivateData(g_WKPDID_D3DDebugObjectName, 0, nullptr);
+            obj->SetPrivateData(WKPDID_D3DDebugObjectName, 0, nullptr);
     }
 }
 
@@ -52,11 +50,25 @@ void D3D11SetObjectNameIndexed(ID3D11DeviceChild* obj, const char* name, std::ui
     if (name != nullptr)
     {
         /* Append subscript to label */
-        std::string subscript = std::to_string(index);
+        const std::string subscript = std::to_string(index);
         D3D11SetObjectNameSubscript(obj, name, subscript.c_str());
     }
     else
         D3D11SetObjectName(obj, nullptr);
+}
+
+std::string D3D11GetObjectName(ID3D11DeviceChild* obj)
+{
+    if (obj != nullptr)
+    {
+        UINT nameLen = 0;
+        obj->GetPrivateData(WKPDID_D3DDebugObjectName, &nameLen, nullptr);
+        std::string name;
+        name.resize(nameLen);
+        obj->GetPrivateData(WKPDID_D3DDebugObjectName, &nameLen, &name[0]);
+        return name;
+    }
+    return "";
 }
 
 

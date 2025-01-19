@@ -13,11 +13,13 @@
 #include "../Shader/GLShaderBindingLayout.h"
 #include "../Shader/GLShaderPipeline.h"
 #include "../Shader/GLShader.h"
+#include "../Shader/GLShaderBufferInterfaceMap.h"
 #include <LLGL/Report.h>
 #include <LLGL/PipelineState.h>
 #include <LLGL/RenderSystemFlags.h>
 #include <LLGL/Container/ArrayView.h>
 #include <memory>
+#include <unordered_map>
 
 
 namespace LLGL
@@ -81,6 +83,18 @@ class GLPipelineState : public PipelineState
             return uniformMap_;
         }
 
+        // Returns the interface map for SSBOs, sampler buffers, and image buffers.
+        inline const GLShaderBufferInterfaceMap* GetBufferInterfaceMap() const
+        {
+            return &bufferInterfaceMap_;
+        }
+
+        // Returns the GL bitfield of the memory barriers the pipeline layout of this PSO was created with. See GLPipelineLayout::GetBarriersBitfield().
+        inline GLbitfield GetBarriersBitfield() const
+        {
+            return barriers_;
+        }
+
     protected:
 
         // Returns a mutable reference to the PSO report.
@@ -91,18 +105,39 @@ class GLPipelineState : public PipelineState
 
     private:
 
+        struct GLActiveUniform
+        {
+            GLint   size;
+            GLenum  type;
+        };
+
+        // Maps a name to its active GL uniform.
+        using GLNameToUniformMap = std::unordered_map<std::string, GLActiveUniform>;
+
+    private:
+
         // Builds the index-to-uniform map.
         void BuildUniformMap(GLShader::Permutation permutation, const std::vector<UniformDescriptor>& uniforms);
 
+        // Builds the container that maps a name to the index of its active GL uniform.
+        void BuildNameToActiveUniformMap(GLuint program, GLNameToUniformMap& outNameToUniformMap);
+
         // Builds the specified uniform location.
-        void BuildUniformLocation(GLuint program, GLUniformLocation& outUniform, const UniformDescriptor& inUniform);
+        void BuildUniformLocation(
+            GLuint                      program,
+            GLUniformLocation&          outUniform,
+            const UniformDescriptor&    inUniform,
+            const GLNameToUniformMap&   nameToUniformMap
+        );
 
     private:
 
         const bool                      isGraphicsPSO_                                  = false;
+        GLbitfield                      barriers_                                       = 0;
         const GLPipelineLayout*         pipelineLayout_                                 = nullptr;
         GLShaderPipelineSPtr            shaderPipelines_[GLShader::PermutationCount];
         GLShaderBindingLayoutSPtr       shaderBindingLayout_;
+        GLShaderBufferInterfaceMap      bufferInterfaceMap_;
         std::vector<GLUniformLocation>  uniformMap_;
         Report                          report_;
 

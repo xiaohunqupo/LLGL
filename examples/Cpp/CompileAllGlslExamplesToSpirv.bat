@@ -13,15 +13,16 @@ call :CompileGlslToSpirv ClothPhysics/Example.CSStretchConstraints.450core.comp
 call :CompileGlslToSpirv ClothPhysics/Example.CSRelaxation.450core.comp
 echo DONE
 
-echo ####### ComputeShader #######
-call :CompileGlslToSpirv ComputeShader/Example.comp
-call :CompileGlslToSpirv ComputeShader/Example.vert
-call :CompileGlslToSpirv ComputeShader/Example.frag
-echo DONE
-
 echo ####### Fonts #######
 call :CompileGlslToSpirv Fonts/Example.450core.vert
 call :CompileGlslToSpirv Fonts/Example.450core.frag
+echo DONE
+
+echo ####### HelloGame #######
+call :CompileGlslToSpirv HelloGame/HelloGame.VSInstance.450core.vert
+call :CompileGlslToSpirv HelloGame/HelloGame.PSInstance.450core.frag
+call :CompileGlslToSpirv HelloGame/HelloGame.VSGround.450core.vert
+call :CompileGlslToSpirv HelloGame/HelloGame.PSGround.450core.frag
 echo DONE
 
 echo ####### HelloTriangle #######
@@ -29,14 +30,20 @@ call :CompileGlslToSpirv HelloTriangle/Example.450core.vert
 call :CompileGlslToSpirv HelloTriangle/Example.450core.frag
 echo DONE
 
+echo ####### HelloTriangle #######
+call :CompileGlslToSpirv HelloTriangle/Example.450core.vert
+call :CompileGlslToSpirv HelloTriangle/Example.450core.frag
+echo DONE
+
+echo ####### IndirectDraw #######
+call :CompileGlslToSpirv IndirectDraw/Example.comp
+call :CompileGlslToSpirv IndirectDraw/Example.vert
+call :CompileGlslToSpirv IndirectDraw/Example.frag
+echo DONE
+
 echo ####### Instancing #######
 call :CompileGlslToSpirv Instancing/Example.450core.vert
 call :CompileGlslToSpirv Instancing/Example.450core.frag
-echo DONE
-
-echo ####### Mapping #######
-call :CompileGlslToSpirv Mapping/Example.450core.vert
-call :CompileGlslToSpirv Mapping/Example.450core.frag
 echo DONE
 
 echo ####### MultiContext #######
@@ -53,6 +60,13 @@ echo DONE
 echo ####### MultiThreading #######
 call :CompileGlslToSpirv MultiThreading/Example.450core.vert
 call :CompileGlslToSpirv MultiThreading/Example.450core.frag
+echo DONE
+
+echo ####### PBR #######
+call :CompileGlslToSpirv PBR/Example.Mesh.450core.vert
+call :CompileGlslToSpirv PBR/Example.Mesh.450core.frag
+call :CompileGlslToSpirv PBR/Example.Sky.450core.vert
+call :CompileGlslToSpirv PBR/Example.Sky.450core.frag
 echo DONE
 
 echo ####### PostProcessing #######
@@ -88,12 +102,6 @@ echo ####### StencilBuffer #######
 call :CompileGlslToSpirv StencilBuffer/Stencil.450core.vert
 call :CompileGlslToSpirv StencilBuffer/Scene.450core.vert
 call :CompileGlslToSpirv StencilBuffer/Scene.450core.frag
-echo DONE
-
-echo ####### StreamOutput #######
-call :CompileGlslToSpirv StreamOutput/Example.450core.vert
-call :CompileGlslToSpirv StreamOutput/Example.450core.geom
-call :CompileGlslToSpirv StreamOutput/Example.450core.frag
 echo DONE
 
 echo ####### Tessellation #######

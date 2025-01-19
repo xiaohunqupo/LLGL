@@ -16,10 +16,14 @@
 #   include <LLGL/Platform/Platform.h>
 #   if defined(LLGL_OS_WIN32)
 #      include "Win32/Win32Debug.h"
+#   elif defined(LLGL_OS_UWP)
+#      include "UWP/UWPDebug.h"
 #   elif defined(LLGL_OS_MACOS)
 #      include "MacOS/MacOSDebug.h"
 #   elif defined(LLGL_OS_LINUX)
 #      include "Linux/LinuxDebug.h"
+#   elif defined(LLGL_OS_WASM)
+#      include "Wasm/WasmDebug.h"
 #   elif defined(LLGL_OS_IOS)
 #      include "IOS/IOSDebug.h"
 #   elif defined(LLGL_OS_ANDROID)

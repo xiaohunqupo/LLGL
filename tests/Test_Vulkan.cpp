@@ -10,30 +10,125 @@
 #include <LLGL/Utils/VertexFormat.h>
 #include <Gauss/Gauss.h>
 #include <chrono>
-#include <iostream>
 
 #define STB_IMAGE_IMPLEMENTATION
 #include <stb/stb_image.h>
 
 
-//#define TEST_QUERY
+#define TEST_QUERY              0
+#define TEST_CUSTOM_VKDEVICE    0
+
+
+#if TEST_CUSTOM_VKDEVICE && _WIN32
+#   include <vulkan/vulkan.h>
+#   include <vulkan/vulkan_win32.h>
+#   include <LLGL/Backend/Vulkan/NativeHandle.h>
+#   define VALIDATE_VKRESULT(EXPR)                                                          \
+        {                                                                                   \
+            VkResult result = (EXPR);                                                       \
+            if (result != VK_SUCCESS)                                                       \
+            {                                                                               \
+                throw std::runtime_error(                                                   \
+                    #EXPR " failed; VkResult = " + std::to_string(static_cast<int>(result)) \
+                );                                                                          \
+            }                                                                               \
+        }
+#   pragma comment(lib, "vulkan-1")
+#endif
 
 
 int main()
 {
     try
     {
+        LLGL::Log::RegisterCallbackStd();
+
+        #if TEST_CUSTOM_VKDEVICE && _WIN32
+
+        const char* vulkanInstanceExt[] = { VK_KHR_GET_PHYSICAL_DEVICE_PROPERTIES_2_EXTENSION_NAME, VK_KHR_SURFACE_EXTENSION_NAME, VK_KHR_WIN32_SURFACE_EXTENSION_NAME };
+
+        // Create Vulkan instance
+        VkInstance vulkanInstance = VK_NULL_HANDLE;
+        VkInstanceCreateInfo instanceCreateInfo = {};
+        instanceCreateInfo.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
+        instanceCreateInfo.enabledExtensionCount    = sizeof(vulkanInstanceExt)/sizeof(vulkanInstanceExt[0]);
+        instanceCreateInfo.ppEnabledExtensionNames  = vulkanInstanceExt;
+        VALIDATE_VKRESULT(vkCreateInstance(&instanceCreateInfo, nullptr, &vulkanInstance));
+
+        // Create Vulkan physical device
+        std::uint32_t numPhysicalDevices = 0;
+        VALIDATE_VKRESULT(vkEnumeratePhysicalDevices(vulkanInstance, &numPhysicalDevices, nullptr));
+        if (numPhysicalDevices == 0)
+            throw std::runtime_error("failed to find physical device with Vulkan support");
+
+        std::vector<VkPhysicalDevice> physicalDeviceList(numPhysicalDevices, VK_NULL_HANDLE);
+        VALIDATE_VKRESULT(vkEnumeratePhysicalDevices(vulkanInstance, &numPhysicalDevices, physicalDeviceList.data()));
+        if (physicalDeviceList.empty() || physicalDeviceList.front() == VK_NULL_HANDLE)
+            throw std::runtime_error("failed to find physical device with Vulkan support");
+
+        VkPhysicalDevice physicalDevice = physicalDeviceList.front();
+
+        // Find queue families
+        uint32_t numQueueFamilies = 0;
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &numQueueFamilies, nullptr);
+        std::vector<VkQueueFamilyProperties> queueFamilies(numQueueFamilies);
+        vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, &numQueueFamilies, queueFamilies.data());
+
+        std::uint32_t queueGraphicsFamily = 0;
+        for (std::uint32_t i = 0; i < queueFamilies.size(); ++i)
+        {
+            if (queueFamilies[i].queueFlags & VK_QUEUE_GRAPHICS_BIT)
+            {
+                queueGraphicsFamily = i;
+                break;
+            }
+        }
+
+        // Create Vulkan logical device
+        const float queuePriority = 1.0f;
+        VkDeviceQueueCreateInfo queueCreateInfo = {};
+        queueCreateInfo.sType               = VK_STRUCTURE_TYPE_DEVICE_QUEUE_CREATE_INFO;
+        queueCreateInfo.queueFamilyIndex    = queueGraphicsFamily;
+        queueCreateInfo.queueCount          = 1;
+        queueCreateInfo.pQueuePriorities    = &queuePriority;
+
+        const char* vulkanDeviceExt[] = { VK_KHR_SWAPCHAIN_EXTENSION_NAME, VK_KHR_MAINTENANCE1_EXTENSION_NAME };
+        VkDeviceCreateInfo deviceCreateInfo = {};
+        deviceCreateInfo.sType                      = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO;
+        deviceCreateInfo.pQueueCreateInfos          = &queueCreateInfo;
+        deviceCreateInfo.queueCreateInfoCount       = 1;
+        deviceCreateInfo.enabledExtensionCount      = sizeof(vulkanDeviceExt)/sizeof(vulkanDeviceExt[0]);
+        deviceCreateInfo.ppEnabledExtensionNames    = vulkanDeviceExt;
+
+        VkDevice vulkanDevice = VK_NULL_HANDLE;
+        VALIDATE_VKRESULT(vkCreateDevice(physicalDevice, &deviceCreateInfo, nullptr, &vulkanDevice));
+
+        // Pass native handles to LLGL
+        LLGL::Vulkan::RenderSystemNativeHandle nativeVulkanHandle;
+        nativeVulkanHandle.instance         = vulkanInstance;
+        nativeVulkanHandle.physicalDevice   = physicalDevice;
+        nativeVulkanHandle.device           = vulkanDevice;
+
+        #endif // /TEST_CUSTOM_VKDEVICE
+
         // Load render system module
-        auto renderer = LLGL::RenderSystem::Load("Vulkan");
+        LLGL::RenderSystemDescriptor renderSysDesc("Vulkan");
+
+        #if TEST_CUSTOM_VKDEVICE
+        renderSysDesc.nativeHandle      = &nativeVulkanHandle;
+        renderSysDesc.nativeHandleSize  = sizeof(nativeVulkanHandle);
+        #endif
+
+        auto renderer = LLGL::RenderSystem::Load(renderSysDesc);
 
         // Print renderer information
         const auto& info = renderer->GetRendererInfo();
         const auto& caps = renderer->GetRenderingCaps();
 
-        std::cout << "Renderer:         " << info.rendererName << std::endl;
-        std::cout << "Device:           " << info.deviceName << std::endl;
-        std::cout << "Vendor:           " << info.vendorName << std::endl;
-        std::cout << "Shading Language: " << info.shadingLanguageName << std::endl;
+        LLGL::Log::Printf("Renderer:         %s\n", info.rendererName.c_str());
+        LLGL::Log::Printf("Device:           %s\n", info.deviceName.c_str());
+        LLGL::Log::Printf("Vendor:           %s\n", info.vendorName.c_str());
+        LLGL::Log::Printf("Shading Language: %s\n", info.shadingLanguageName.c_str());
 
         // Create swap-chain
         LLGL::SwapChainDescriptor swapChainDesc;
@@ -95,12 +190,7 @@ int main()
         vertexFormat.AppendAttribute({ "color",    LLGL::Format::RGB32Float });
 
         // Create vertex data
-        auto PointOnCircle = [](float angle, float radius)
-        {
-            return Gs::Vector2f { std::sin(angle) * radius, std::cos(angle) * radius };
-        };
-
-        const float uScale = 25.0f, vScale = 25.0f;
+        const float uScale = 2.0f, vScale = -2.0f;
 
         struct Vertex
         {
@@ -181,7 +271,7 @@ int main()
         // Create pipeline layout
         LLGL::PipelineLayoutDescriptor layoutDesc;
 
-        layoutDesc.bindings =
+        layoutDesc.heapBindings =
         {
             LLGL::BindingDescriptor{ LLGL::ResourceType::Buffer,  LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::VertexStage  , 2 },
             LLGL::BindingDescriptor{ LLGL::ResourceType::Buffer,  LLGL::BindFlags::ConstantBuffer, LLGL::StageFlags::FragmentStage, 5 },
@@ -210,10 +300,10 @@ int main()
         auto pipeline = renderer->CreatePipelineState(pipelineDesc);
 
         if (auto report = pipeline->GetReport())
-            std::cerr << report->GetText() << std::endl;
+            LLGL::Log::Errorf("%s\n", report->GetText());
 
         // Create query
-        #ifdef TEST_QUERY
+        #if TEST_QUERY
         auto query = renderer->CreateQueryHeap(LLGL::QueryType::PipelineStatistics);
         #endif
 
@@ -250,7 +340,7 @@ int main()
                     commands->Clear(LLGL::ClearFlags::ColorDepth, { 0.2f, 0.2f, 0.4f, 1.0f });
 
                     // Draw scene
-                    #ifdef TEST_QUERY
+                    #if TEST_QUERY
                     commands->BeginQuery(*query);
                     commands->Draw(4, 0);
                     commands->EndQuery(*query);
@@ -285,10 +375,19 @@ int main()
             // Present result on screen
             swapChain->Present();
         }
+
+        #if TEST_CUSTOM_VKDEVICE && _WIN32
+
+        LLGL::RenderSystem::Unload(std::move(renderer));
+
+        vkDestroyDevice(vulkanDevice, nullptr);
+        vkDestroyInstance(vulkanInstance, nullptr);
+
+        #endif
     }
     catch (const std::exception& e)
     {
-        std::cerr << e.what() << std::endl;
+        LLGL::Log::Errorf("%s\n", e.what());
         #ifdef _WIN32
         system("pause");
         #endif

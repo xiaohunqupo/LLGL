@@ -10,7 +10,9 @@
 
 
 #include <LLGL/RenderTarget.h>
+#include "D3D11RenderTargetHandles.h"
 #include "../../DXCommon/ComPtr.h"
+#include "../../../Core/CompilerExtensions.h"
 #include <vector>
 #include <functional>
 #include <d3d11.h>
@@ -21,6 +23,7 @@ namespace LLGL
 
 
 class D3D11Texture;
+class D3D11RenderPass;
 class D3D11RenderSystem;
 
 class D3D11RenderTarget final : public RenderTarget
@@ -32,29 +35,20 @@ class D3D11RenderTarget final : public RenderTarget
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
         // Constructs the D3D11 render target with all attachments.
         D3D11RenderTarget(ID3D11Device* device, const RenderTargetDescriptor& desc);
 
-        // Releases all render target views manually to avoid having a separate container with ComPtr.
-        ~D3D11RenderTarget();
-
         // Resolves all multi-sampled subresources.
         void ResolveSubresources(ID3D11DeviceContext* context);
 
-        // Returns the list of native render target views (RTV).
-        inline const std::vector<ID3D11RenderTargetView*>& GetRenderTargetViews() const
+        // Returns the render-target handles container.
+        inline const D3D11RenderTargetHandles& GetRenderTargetHandles() const
         {
-            return renderTargetViews_;
-        }
-
-        // Returns the native depth stencil view (DSV).
-        inline ID3D11DepthStencilView* GetDepthStencilView() const
-        {
-            return depthStencilView_.Get();
+            return renderTargetHandles_;
         }
 
         // Returns true if this render-target has multi-sampled color attachments.
@@ -74,7 +68,8 @@ class D3D11RenderTarget final : public RenderTarget
             const DXGI_FORMAT           format,
             UINT                        baseMipLevel,
             UINT                        baseArrayLayer,
-            UINT                        numArrayLayers = 1
+            UINT                        numArrayLayers  = 1,
+            UINT                        dsvFlags        = 0
         );
 
         // Creates a render-target-view (RTV) of the specified subresource.
@@ -95,15 +90,21 @@ class D3D11RenderTarget final : public RenderTarget
 
         ID3D11Texture2D* CreateInternalTexture(ID3D11Device* device, DXGI_FORMAT format, UINT bindFlags);
 
-        void CreateRenderTargetView(
+        LLGL_NODISCARD
+        ComPtr<ID3D11RenderTargetView> CreateRenderTargetView(
             ID3D11Device*               device,
             const AttachmentDescriptor& colorAttachment,
-            const AttachmentDescriptor& resolveAttachment
+            const AttachmentDescriptor& resolveAttachment,
+            D3D11BindingLocator*&       outBindingLocator,
+            D3D11SubresourceRange&      outSubresourceRange
         );
 
-        void CreateDepthStencilView(
+        LLGL_NODISCARD
+        ComPtr<ID3D11DepthStencilView> CreateDepthStencilView(
             ID3D11Device*               device,
-            const AttachmentDescriptor& depthStencilAttachment
+            const AttachmentDescriptor& depthStencilAttachment,
+            UINT                        dsvFlags,
+            D3D11BindingLocator*&       outBindingLocator
         );
 
         void CreateResolveTarget(
@@ -128,16 +129,14 @@ class D3D11RenderTarget final : public RenderTarget
 
         Extent2D                                resolution_;
 
-        std::vector<ID3D11RenderTargetView*>    renderTargetViews_; // Manual calls to IUnknown::Release to avoid having seprate container with ComPtr.
         std::vector<ComPtr<ID3D11Texture2D>>    internalTextures_;  // Depth-stencil texture or multi-sampled color targets
+        DXGI_FORMAT                             depthStencilFormat_     = DXGI_FORMAT_UNKNOWN;
+        D3D11RenderTargetHandles                renderTargetHandles_;
 
-        ComPtr<ID3D11DepthStencilView>          depthStencilView_;
-        DXGI_FORMAT                             depthStencilFormat_ = DXGI_FORMAT_UNKNOWN;
-
-        DXGI_SAMPLE_DESC                        sampleDesc_         = { 1u, 0u };
+        DXGI_SAMPLE_DESC                        sampleDesc_             = { 1u, 0u };
         std::vector<ResolveTarget>              resolveTargets_;
 
-        const RenderPass*                       renderPass_         = nullptr;
+        const D3D11RenderPass*                  renderPass_             = nullptr;
 
 };
 

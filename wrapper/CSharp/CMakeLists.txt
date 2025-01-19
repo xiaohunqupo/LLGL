@@ -7,9 +7,11 @@
 
 # Originally authored on 10/24/2023
 
-cmake_minimum_required(VERSION 3.7)
+if (NOT DEFINED CMAKE_MINIMUM_REQUIRED_VERSION)
+    cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
+endif()
 
-project(SharpLLGL CSharp)
+project(LLGL.NET CSharp)
 
 
 # === Source files ===
@@ -25,7 +27,7 @@ source_group("Wrapper\\CSharp" FILES ${FilesWrapperCsharp})
 
 # === Projects ===
 
-add_library(SharpLLGL SHARED ${FilesWrapperCsharp})
-set_target_properties(SharpLLGL PROPERTIES FOLDER "LLGL (CSharp)")
-target_compile_options(SharpLLGL PUBLIC "/unsafe")
+add_library(LLGL.NET SHARED ${FilesWrapperCsharp})
+set_target_properties(LLGL.NET PROPERTIES FOLDER "LLGL (CSharp)")
+target_compile_options(LLGL.NET PUBLIC "/unsafe")
 

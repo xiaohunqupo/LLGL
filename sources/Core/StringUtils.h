@@ -118,26 +118,25 @@ LLGL_EXPORT std::string ReadFileString(const char* filename);
 // Reads the specified binary file into a buffer.
 LLGL_EXPORT std::vector<char> ReadFileBuffer(const char* filename);
 
-// Converts the UTF16 input string to UTF8 string.
-LLGL_EXPORT std::string ToUTF8String(const std::wstring& utf16);
-LLGL_EXPORT std::string ToUTF8String(const wchar_t* utf16);
-
 // Converts the UTF8 input string to UTF16 string.
-LLGL_EXPORT std::wstring ToUTF16String(const std::string& utf8);
-LLGL_EXPORT std::wstring ToUTF16String(const char* utf8);
+LLGL_EXPORT std::wstring ToWideString(const std::string& str);
+LLGL_EXPORT std::wstring ToWideString(const char* str);
 
 // Writes a formatted string into an STL string.
 LLGL_EXPORT void StringPrintf(std::string& str, const char* format, va_list args1, va_list args2);
 
 struct FormattedTableColumn
 {
-    unsigned                maxWidth        = -1;
-    unsigned                multiLineIndent = 0; // Nuber of blanks for each multi-line cell
+    unsigned                maxWidth        = static_cast<unsigned>(-1);
+    unsigned                multiLineIndent = 0; // Number of blanks for each multi-line cell
     ArrayView<UTF8String>   cells;
 };
 
 // Writes the specified table into a formatted string.
-LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColumn>& columns);
+LLGL_EXPORT UTF8String WriteTableToUTF8String(const ArrayView<FormattedTableColumn>& columns, const char* delimiters = ":;., ");
+
+// Returns the input string or "unnamed" if the input string is empty or null.
+LLGL_EXPORT const char* GetOptionalDebugName(const char* debugName);
 
 
 } // /namespace LLGL

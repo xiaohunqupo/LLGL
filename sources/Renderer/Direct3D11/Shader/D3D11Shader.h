@@ -24,35 +24,6 @@ namespace LLGL
 {
 
 
-// Union for easy handling of native D3D11 shader objects.
-union D3D11NativeShader
-{
-    inline D3D11NativeShader() :
-        vs { nullptr }
-    {
-    }
-    inline D3D11NativeShader(const D3D11NativeShader& rhs) :
-        vs { rhs.vs }
-    {
-    }
-    inline D3D11NativeShader& operator = (const D3D11NativeShader& rhs)
-    {
-        vs = rhs.vs;
-        return *this;
-    }
-    inline ~D3D11NativeShader()
-    {
-        vs.Reset();
-    }
-
-    ComPtr<ID3D11VertexShader>      vs;
-    ComPtr<ID3D11HullShader>        hs;
-    ComPtr<ID3D11DomainShader>      ds;
-    ComPtr<ID3D11GeometryShader>    gs;
-    ComPtr<ID3D11PixelShader>       ps;
-    ComPtr<ID3D11ComputeShader>     cs;
-};
-
 struct D3D11ConstantReflection
 {
     std::string name;   // Name of the constant buffer field.
@@ -67,7 +38,7 @@ struct D3D11ConstantBufferReflection
     std::vector<D3D11ConstantReflection>    fields;
 };
 
-class D3D11Shader final : public Shader
+class D3D11Shader : public Shader
 {
 
     public:
@@ -76,17 +47,17 @@ class D3D11Shader final : public Shader
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override final;
 
     public:
 
-        D3D11Shader(ID3D11Device* device, const ShaderDescriptor& desc);
+        D3D11Shader(const ShaderType type);
 
         // Returns a list of all reflected constant buffers including their fields.
         HRESULT ReflectAndCacheConstantBuffers(const std::vector<D3D11ConstantBufferReflection>** outConstantBuffers);
 
         // Returns the native D3D shader object.
-        inline const D3D11NativeShader& GetNative() const
+        inline const ComPtr<ID3D11DeviceChild>& GetNative() const
         {
             return native_;
         }
@@ -97,28 +68,25 @@ class D3D11Shader final : public Shader
             return byteCode_.Get();
         }
 
-        // Returns the input layout for vertex shaders.
-        inline const ComPtr<ID3D11InputLayout>& GetInputLayout() const
-        {
-            return inputLayout_;
-        }
-
     public:
 
         // Creates a native D3D11 shader from the specified byte code blob.
-        static D3D11NativeShader CreateNativeShaderFromBlob(
+        static ComPtr<ID3D11DeviceChild> CreateNativeShaderFromBlob(
             ID3D11Device*           device,
             const ShaderType        type,
             ID3DBlob*               blob,
             std::size_t             numStreamOutputAttribs  = 0,
             const VertexAttribute*  streamOutputAttribs     = nullptr,
+            UINT                    rasterizedStream        = D3D11_SO_NO_RASTERIZED_STREAM,
             ID3D11ClassLinkage*     classLinkage            = nullptr
         );
 
-    private:
+    protected:
 
         bool BuildShader(ID3D11Device* device, const ShaderDescriptor& shaderDesc);
-        void BuildInputLayout(ID3D11Device* device, UINT numVertexAttribs, const VertexAttribute* vertexAttribs);
+        bool BuildProxyGeometryShader(ID3D11Device* device, const ShaderDescriptor& shaderDesc, ComPtr<ID3D11GeometryShader>& outProxyGeomtryShader);
+
+    private:
 
         bool CompileSource(ID3D11Device* device, const ShaderDescriptor& shaderDesc);
         bool LoadBinary(ID3D11Device* device, const ShaderDescriptor& shaderDesc);
@@ -126,8 +94,7 @@ class D3D11Shader final : public Shader
         void CreateNativeShader(
             ID3D11Device*           device,
             std::size_t             numStreamOutputAttribs  = 0,
-            const VertexAttribute*  streamOutputAttribs     = nullptr,
-            ID3D11ClassLinkage*     classLinkage            = nullptr
+            const VertexAttribute*  streamOutputAttribs     = nullptr
         );
 
         HRESULT ReflectShaderByteCode(ShaderReflection& reflection) const;
@@ -136,12 +103,10 @@ class D3D11Shader final : public Shader
 
     private:
 
-        D3D11NativeShader                           native_;
+        ComPtr<ID3D11DeviceChild>                   native_;
 
         ComPtr<ID3DBlob>                            byteCode_;
         Report                                      report_;
-
-        ComPtr<ID3D11InputLayout>                   inputLayout_;
 
         HRESULT                                     cbufferReflectionResult_    = S_FALSE;
         std::vector<D3D11ConstantBufferReflection>  cbufferReflections_;

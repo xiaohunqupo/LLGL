@@ -36,7 +36,7 @@ enum class PrimitiveTopology
     //! Point list, where each vertex represents a single point primitive.
     PointList,
 
-    //! Line list, where each pair of two vertices represetns a single line primitive.
+    //! Line list, where each pair of two vertices represents a single line primitive.
     LineList,
 
     //! Line strip, where each vertex generates a new line primitive while the previous vertex is used as line start.
@@ -117,7 +117,7 @@ enum class CompareOp
 {
     NeverPass,      //!< Comparison never passes.
     Less,           //!< Comparison passes if the source data is less than the destination data.
-    Equal,          //!< Comparison passes if the source data is euqal to the right-hand-side.
+    Equal,          //!< Comparison passes if the source data is equal to the right-hand-side.
     LessEqual,      //!< Comparison passes if the source data is less than or equal to the right-hand-side.
     Greater,        //!< Comparison passes if the source data is greater than the right-hand-side.
     NotEqual,       //!< Comparison passes if the source data is not equal to the right-hand-side.
@@ -706,6 +706,9 @@ struct BlendDescriptor
     \brief Render-target blend states for the respective color attachments. A maximum of 8 targets is supported.
     \remarks If \c independentBlendEnabled is set to \c false, only the first entry is used,
     i.e. <code>targets[0]</code> and all remaining entries <code>targets[1..7]</code> are ignored.
+    \remarks If the first target uses a dual-source blending operation
+    (i.e. BlendOp::Src1Color, BlendOp::InvSrc1Color, BlendOp::Src1Alpha, or BlendOp::InvSrc1Alpha), only the first target can be used.
+    Using dual-source blending with more than one render target is undefined behavior.
     \see independentBlendEnabled
     */
     BlendTargetDescriptor   targets[LLGL_MAX_NUM_COLOR_ATTACHMENTS];
@@ -751,6 +754,13 @@ shader stages, depth-/ stencil-/ rasterizer-/ blend states etc.
 */
 struct GraphicsPipelineDescriptor
 {
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*             debugName               = nullptr;
+
     /**
     \brief Specifies an optional pipeline layout for the graphics pipeline. By default null.
     \remarks This layout determines at which slots buffer resources will be bound.
@@ -866,6 +876,13 @@ struct GraphicsPipelineDescriptor
 */
 struct ComputePipelineDescriptor
 {
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*             debugName       = nullptr;
+
     /**
     \brief Pointer to an optional pipeline layout for the graphics pipeline.
     \remarks This layout determines at which slots buffer resources can be bound.

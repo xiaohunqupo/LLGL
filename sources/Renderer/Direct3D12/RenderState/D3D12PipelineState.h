@@ -31,7 +31,7 @@ class D3D12PipelineState : public PipelineState
 
     public:
 
-        void SetName(const char* name) override final;
+        void SetDebugName(const char* name) override final;
         const Report* GetReport() const override final;
 
     public:
@@ -82,6 +82,12 @@ class D3D12PipelineState : public PipelineState
         inline ID3D12RootSignature* GetRootSignature() const
         {
             return rootSignature_.Get();
+        }
+
+        // Returns the mutable report object.
+        inline Report& GetMutableReport()
+        {
+            return report_;
         }
 
     private:

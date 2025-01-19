@@ -9,7 +9,9 @@
 #include "D3D11StateManager.h"
 #include "D3D11PipelineLayout.h"
 #include "../D3D11Types.h"
-#include "../Shader/D3D11Shader.h"
+#include "../D3D11ObjectUtils.h"
+#include "../Shader/D3D11DomainShader.h"
+#include "../Shader/D3D11VertexShader.h"
 #include "../../CheckedCast.h"
 #include "../../PipelineStateUtils.h"
 #include "../../../Core/Assertion.h"
@@ -17,6 +19,7 @@
 #include "../../../Core/ByteBufferIterator.h"
 #include <LLGL/PipelineStateFlags.h>
 #include <LLGL/Utils/ForRange.h>
+#include <LLGL/Utils/TypeNames.h>
 #include <stdexcept>
 
 
@@ -54,10 +57,21 @@ D3D11GraphicsPSOBase::D3D11GraphicsPSOBase(const GraphicsPipelineDescriptor& des
     D3D11PipelineState { /*isGraphicsPSO:*/ true, desc.pipelineLayout, GetShadersAsArray(desc) }
 {
     /* Validate pointers and get D3D shader objects */
-    if (auto* vertexShaderD3D = LLGL_CAST(const D3D11Shader*, desc.vertexShader))
+    if (auto* vertexShaderD3D = LLGL_CAST(const D3D11VertexShader*, desc.vertexShader))
+    {
+        /* Take input layout and store optional proxy geometry-shader for stream-output */
         inputLayout_ = vertexShaderD3D->GetInputLayout();
+        gs_ = vertexShaderD3D->GetProxyGeometryShader();
+    }
     else
         ResetReport("cannot create D3D graphics PSO without vertex shader", true);
+
+    /* Override proxy geometry shader if the domain shader has one */
+    if (auto* domainShaderD3D = LLGL_CAST(const D3D11DomainShader*, desc.tessEvaluationShader))
+    {
+        if (domainShaderD3D->GetProxyGeometryShader())
+            gs_ = domainShaderD3D->GetProxyGeometryShader();
+    }
 
     GetD3DNativeShaders(desc);
 
@@ -106,11 +120,11 @@ void D3D11GraphicsPSOBase::SetStaticViewportsAndScissors(D3D11StateManager& stat
 
 void D3D11GraphicsPSOBase::GetD3DNativeShaders(const GraphicsPipelineDescriptor& desc)
 {
-    if (Shader* vs = desc.vertexShader        ) { vs_ = LLGL_CAST(D3D11Shader*, vs)->GetNative().vs; }
-    if (Shader* hs = desc.tessControlShader   ) { hs_ = LLGL_CAST(D3D11Shader*, hs)->GetNative().hs; }
-    if (Shader* ds = desc.tessEvaluationShader) { ds_ = LLGL_CAST(D3D11Shader*, ds)->GetNative().ds; }
-    if (Shader* gs = desc.geometryShader      ) { gs_ = LLGL_CAST(D3D11Shader*, gs)->GetNative().gs; }
-    if (Shader* ps = desc.fragmentShader      ) { ps_ = LLGL_CAST(D3D11Shader*, ps)->GetNative().ps; }
+    if (Shader* vs = desc.vertexShader        ) { D3D11CastShader(vs_, LLGL_CAST(D3D11Shader*, vs)->GetNative(), ShaderType::Vertex,         desc.debugName, GetMutableReport()); }
+    if (Shader* hs = desc.tessControlShader   ) { D3D11CastShader(hs_, LLGL_CAST(D3D11Shader*, hs)->GetNative(), ShaderType::TessControl,    desc.debugName, GetMutableReport()); }
+    if (Shader* ds = desc.tessEvaluationShader) { D3D11CastShader(ds_, LLGL_CAST(D3D11Shader*, ds)->GetNative(), ShaderType::TessEvaluation, desc.debugName, GetMutableReport()); }
+    if (Shader* gs = desc.geometryShader      ) { D3D11CastShader(gs_, LLGL_CAST(D3D11Shader*, gs)->GetNative(), ShaderType::Geometry,       desc.debugName, GetMutableReport()); }
+    if (Shader* ps = desc.fragmentShader      ) { D3D11CastShader(ps_, LLGL_CAST(D3D11Shader*, ps)->GetNative(), ShaderType::Fragment,       desc.debugName, GetMutableReport()); }
 }
 
 void D3D11GraphicsPSOBase::BuildStaticStateBuffer(const GraphicsPipelineDescriptor& desc)

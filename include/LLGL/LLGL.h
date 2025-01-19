@@ -26,7 +26,7 @@
 
 //DOXYGEN MAIN PAGE
 /**
- * \mainpage LLGL 0.03 Beta Documentation
+ * \mainpage LLGL 0.04 Beta Documentation
  *
  * LLGL (Low Level Graphics Library)
  * =================================
@@ -36,7 +36,7 @@
  * Overview
  * --------
  *
- * - **Version**: 0.03 Beta
+ * - **Version**: 0.04 Beta
  * - **License**: [3-Clause BSD License](https://github.com/LukasBanana/LLGL/blob/master/LICENSE.txt)
  *
  *

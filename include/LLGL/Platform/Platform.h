@@ -15,7 +15,12 @@ see https://sourceforge.net/p/predef/wiki/OperatingSystems/
 */
 
 #if defined _WIN32
-#   define LLGL_OS_WIN32
+#   include <winapifamily.h>
+#   if WINAPI_FAMILY == WINAPI_FAMILY_APP
+#       define LLGL_OS_UWP
+#   else
+#       define LLGL_OS_WIN32
+#   endif
 #elif defined __APPLE__
 #   include <TargetConditionals.h>
 #   if TARGET_OS_IPHONE != 0
@@ -23,8 +28,10 @@ see https://sourceforge.net/p/predef/wiki/OperatingSystems/
 #   else
 #       define LLGL_OS_MACOS
 #   endif
-#elif defined __ANDROID__
+#elif defined __ANDROID__ || defined ANDROID
 #   define LLGL_OS_ANDROID
+#elif defined EMSCRIPTEN
+#   define LLGL_OS_WASM
 #elif defined __linux__
 #   define LLGL_OS_LINUX
 #endif

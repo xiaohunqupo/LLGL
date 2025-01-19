@@ -27,7 +27,7 @@ class DbgShader final : public Shader
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
 
     public:
 
@@ -42,6 +42,18 @@ class DbgShader final : public Shader
         // Returns true if this shader has no errors.
         bool IsCompiled() const;
 
+        // Returns true if this shader has any output attributes.
+        inline bool HasAnyOutputAttributes() const
+        {
+            return hasAnyOutputAttribs_;
+        }
+
+        // Returns true if the shader reflection has failed.
+        inline bool HasReflectionFailed() const
+        {
+            return hasReflectionFailed_;
+        }
+
     public:
 
         Shader&                 instance;
@@ -50,12 +62,15 @@ class DbgShader final : public Shader
 
     private:
 
-        void QueryInstanceAndVertexIDs();
+        void CacheShaderReflection();
+        void CacheShaderReflectionResults(const ShaderReflection& reflect);
 
     private:
 
         std::string             vertexID_;
         std::string             instanceID_;
+        bool                    hasAnyOutputAttribs_    = false;
+        bool                    hasReflectionFailed_    = false;
 
 };
 

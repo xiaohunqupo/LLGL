@@ -24,11 +24,17 @@ DbgBuffer::DbgBuffer(Buffer& instance, const BufferDescriptor& desc) :
     Buffer         { desc.bindFlags                                           },
     vertexAttribs_ { desc.vertexAttribs.begin(), desc.vertexAttribs.end()     },
     instance       { instance                                                 },
-    desc           { CopyBufferDescWithNewVertexAttribs(desc, vertexAttribs_) }
+    desc           { CopyBufferDescWithNewVertexAttribs(desc, vertexAttribs_) },
+    label          { LLGL_DBG_LABEL(desc)                                     }
 {
 }
 
-void DbgBuffer::SetName(const char* name)
+bool DbgBuffer::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    return instance.GetNativeHandle(nativeHandle, nativeHandleSize);
+}
+
+void DbgBuffer::SetDebugName(const char* name)
 {
     DbgSetObjectName(*this, name);
 }

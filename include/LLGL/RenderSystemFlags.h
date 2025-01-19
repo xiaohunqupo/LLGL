@@ -15,6 +15,9 @@
 #include <LLGL/Constants.h>
 #include <LLGL/RendererConfiguration.h>
 #include <LLGL/Deprecated.h>
+#include <LLGL/Container/UTF8String.h>
+#include <LLGL/Container/StringLiteral.h>
+#include <LLGL/Container/DynamicVector.h>
 
 #include <LLGL/Platform/Platform.h>
 #if defined LLGL_OS_ANDROID
@@ -37,7 +40,7 @@ class RenderingDebugger;
 /* ----- Enumerations ----- */
 
 /**
-\brief Shading language version enumation.
+\brief Shading language version enumeration.
 \remarks These enumeration entries can be casted to an integer using the bitmask ShadingLanguage::VersionBitmask to get the respective version number:
 \code
 // 'versionNo' will have the value 330
@@ -79,10 +82,14 @@ enum class ShadingLanguage
     HLSL_5_0        = (0x30000 | 500),  //!< HLSL 5.0 (since Direct3D 11).
     HLSL_5_1        = (0x30000 | 510),  //!< HLSL 5.1 (since Direct3D 11.3).
     HLSL_6_0        = (0x30000 | 600),  //!< HLSL 6.0 (since Direct3D 12). Shader model 6.0 adds wave intrinsics and 64-bit integer types to HLSL.
-    HLSL_6_1        = (0x30000 | 601),  //!< HLSL 6.1 (since Direct3D 12). Shader model 6.1 adds \c SV_ViewID and \c SV_Barycentrics semantics to HLSL.
-    HLSL_6_2        = (0x30000 | 602),  //!< HLSL 6.2 (since Direct3D 12). Shader model 6.2 adds 16-bit scalar types to HLSL.
-    HLSL_6_3        = (0x30000 | 603),  //!< HLSL 6.3 (since Direct3D 12). Shader model 6.3 adds ray tracing (DXR) to HLSL.
-    HLSL_6_4        = (0x30000 | 604),  //!< HLSL 6.4 (since Direct3D 12). Shader model 6.4 adds machine learning intrinsics to HLSL.
+    HLSL_6_1        = (0x30000 | 610),  //!< HLSL 6.1 (since Direct3D 12). Shader model 6.1 adds \c SV_ViewID and \c SV_Barycentrics semantics to HLSL.
+    HLSL_6_2        = (0x30000 | 620),  //!< HLSL 6.2 (since Direct3D 12). Shader model 6.2 adds 16-bit scalar types to HLSL.
+    HLSL_6_3        = (0x30000 | 630),  //!< HLSL 6.3 (since Direct3D 12). Shader model 6.3 adds ray tracing (DXR) to HLSL.
+    HLSL_6_4        = (0x30000 | 640),  //!< HLSL 6.4 (since Direct3D 12). Shader model 6.4 adds machine learning intrinsics to HLSL.
+    HLSL_6_5        = (0x30000 | 650),  //!< HLSL 6.5 (since Direct3D 12). Shader model 6.5 adds DXR 1.1 to HLSL.
+    HLSL_6_6        = (0x30000 | 660),  //!< HLSL 6.6 (since Direct3D 12). Shader model 6.6 adds dynamic resources to HLSL.
+    HLSL_6_7        = (0x30000 | 670),  //!< HLSL 6.7 (since Direct3D 12). Shader model 6.7 adds advanced texture operations to HLSL.
+    HLSL_6_8        = (0x30000 | 680),  //!< HLSL 6.8 (since Direct3D 12). Shader model 6.8 adds work graphs to HLSL.
 
     Metal           = (0x40000),        //!< Metal Shading Language.
     Metal_1_0       = (0x40000 | 100),  //!< Metal 1.0 (since iOS 8.0).
@@ -90,6 +97,10 @@ enum class ShadingLanguage
     Metal_1_2       = (0x40000 | 120),  //!< Metal 1.2 (since iOS 10.0 and macOS 10.12).
     Metal_2_0       = (0x40000 | 200),  //!< Metal 2.0 (since iOS 11.0 and macOS 10.13).
     Metal_2_1       = (0x40000 | 210),  //!< Metal 2.1 (since iOS 12.0 and macOS 10.14).
+    Metal_2_2       = (0x40000 | 220),  //!< Metal 2.2 (since iOS 13.0 and macOS 10.15).
+    Metal_2_3       = (0x40000 | 230),  //!< Metal 2.3 (since iOS 14.0 and macOS 11.0).
+    Metal_2_4       = (0x40000 | 240),  //!< Metal 2.4 (since iOS 15.0 and macOS 12.0).
+    Metal_3_0       = (0x40000 | 300),  //!< Metal 3.0 (since iOS 16.0 and macOS 13.0).
 
     SPIRV           = (0x50000),        //!< SPIR-V Shading Language.
     SPIRV_100       = (0x50000 | 100),  //!< SPIR-V 1.0.
@@ -202,6 +213,7 @@ struct RenderSystemFlags
         /**
         \brief Hints the render system to prefer a video adapter from NVIDIA.
         \remarks This can be used on multi-GPU systems to select a specific video adapter when more than one is available.
+        If multiple preferred device vendors are specified, the order of preference is undefined.
         \remarks This is merely a hint to the render system bebacause not all rendering APIs support selecting a specific video adapter (such as OpenGL).
         \note Only supported with: Direct3D 11, Direct3D 12, Vulkan.
         */
@@ -220,7 +232,7 @@ struct RenderSystemFlags
 
 /**
 \brief Renderer identification number enumeration.
-\remarks There are several IDs for reserved future renderes, which are currently not supported (and maybe never supported).
+\remarks There are several IDs for reserved future renderers, which are currently not supported (and maybe never supported).
 You can use an ID greater than 'RendererID::Reserved' (which has a value of 0x000000ff) for your own renderer.
 Or use one of the pre-defined IDs if you want to implement your own OpenGL/ Direct3D or whatever renderer.
 \see RendererInfo::rendererID
@@ -231,15 +243,24 @@ struct RendererID
 
     static constexpr int Null       = 0x00000001; //!< ID number for a Null renderer. This renderer does not render anything but provides the same interface for debugging purposes.
     static constexpr int OpenGL     = 0x00000002; //!< ID number for an OpenGL renderer.
-    static constexpr int OpenGLES1  = 0x00000003; //!< ID number for an OpenGL ES 1 renderer.
-    static constexpr int OpenGLES2  = 0x00000004; //!< ID number for an OpenGL ES 2 renderer.
-    static constexpr int OpenGLES3  = 0x00000005; //!< ID number for an OpenGL ES 3 renderer.
+    static constexpr int OpenGLES   = 0x00000003; //!< ID number for an OpenGL ES renderer.
+    static constexpr int WebGL      = 0x00000004; //!< ID number for a WebGL renderer.
+    static constexpr int WebGPU     = 0x00000005; //!< ID number for a WebGPU renderer.
     static constexpr int Direct3D9  = 0x00000006; //!< ID number for a Direct3D 9 renderer.
     static constexpr int Direct3D10 = 0x00000007; //!< ID number for a Direct3D 10 renderer.
     static constexpr int Direct3D11 = 0x00000008; //!< ID number for a Direct3D 11 renderer.
     static constexpr int Direct3D12 = 0x00000009; //!< ID number for a Direct3D 12 renderer.
     static constexpr int Vulkan     = 0x0000000A; //!< ID number for a Vulkan renderer.
     static constexpr int Metal      = 0x0000000B; //!< ID number for a Metal renderer.
+
+    LLGL_DEPRECATED("LLGL::RendererID::OpenGLES1 is deprecated since 0.04b; Use LLGL::RendererID::OpenGLES instead!", "OpenGLES")
+    static constexpr int OpenGLES1  = RendererID::OpenGLES;
+
+    LLGL_DEPRECATED("LLGL::RendererID::OpenGLES2 is deprecated since 0.04b; Use LLGL::RendererID::OpenGLES instead!", "OpenGLES")
+    static constexpr int OpenGLES2  = RendererID::OpenGLES;
+
+    LLGL_DEPRECATED("LLGL::RendererID::OpenGLES3 is deprecated since 0.04b; Use LLGL::RendererID::OpenGLES instead!", "OpenGLES")
+    static constexpr int OpenGLES3  = RendererID::OpenGLES;
 
     static constexpr int Reserved   = 0x000000FF; //!< Highest ID number for reserved future renderers. Value is 0x000000ff.
 };
@@ -251,19 +272,19 @@ struct RendererID
 struct RendererInfo
 {
     //! Rendering API name and version (e.g. "OpenGL 4.6").
-    std::string                 rendererName;
+    UTF8String              rendererName;
 
     //! Renderer device name (e.g. "GeForce GTX 1070/PCIe/SSE2").
-    std::string                 deviceName;
+    UTF8String              deviceName;
 
     //! Vendor name of the renderer device (e.g. "NVIDIA Corporation").
-    std::string                 vendorName;
+    UTF8String              vendorName;
 
     //! Shading language version (e.g. "GLSL 4.50").
-    std::string                 shadingLanguageName;
+    UTF8String              shadingLanguageName;
 
     //! List of enabled renderer extensions (e.g. "GL_ARB_direct_state_access" or "VK_EXT_conditional_rendering").
-    std::vector<std::string>    extensionNames;
+    std::vector<UTF8String> extensionNames;
 
     /**
     \brief Arbitrary string used to identify invalidated pipeline caches.
@@ -273,7 +294,7 @@ struct RendererInfo
     \see RenderSystem::CreatePipelineCache
     \see RenderingFeatures::hasPipelineCaching
     */
-    std::vector<char>           pipelineCacheID;
+    std::vector<char>       pipelineCacheID;
 };
 
 /**
@@ -308,7 +329,7 @@ struct RenderSystemDescriptor
     translated to "LLGL_OpenGLD.dll", if compiled on Windows in Debug mode.
     If LLGL was built with the \c LLGL_BUILD_STATIC_LIB option, this member is ignored.
     */
-    std::string         moduleName;
+    StringLiteral       moduleName;
 
     /**
     \brief Render system flags. This can be a bitwise OR combination of RenderSystemFlags entries. By default 0.
@@ -348,16 +369,48 @@ struct RenderSystemDescriptor
     \see rendererConfigSize
     \see RendererConfigurationVulkan
     \see RendererConfigurationOpenGL
-    \see RendererConfigurationOpenGLES3
     */
     const void*         rendererConfig      = nullptr;
 
     /**
-    \brief Specifies the size (in bytes) of the structure where the \c rendererConfig member points to (use \c sizeof with the respective structure). By default 0.
-    \remarks If \c rendererConfig is null then this member is ignored.
+    \brief Specifies the size (in bytes) of the structure \c rendererConfig points to (use \c sizeof with the respective structure). By default 0.
+    \remarks If \c rendererConfig is null then this field is ignored.
     \see rendererConfig
     */
     std::size_t         rendererConfigSize  = 0;
+
+    /**
+    \brief Optional raw pointer to a backend specific native handle structure. If this is null (default), the render system creates its own native handles.
+    These native handles can later be queried via RenderSystem::GetNativeHandle.
+    \remarks This can be used to pass the native device instance or render context for the respective backend if the application has created its own instance.
+    Example usage (for Direct3D12 renderer):
+    \code
+    // Create own D3D12 device object
+    ID3D12Device* myD3D12Device = D3D12CreateDevice(...);
+
+    // Initialize native handle for D3D12
+    LLGL::Direct3D12::RenderSystemNativeHandle nativeHandleD3D12;
+    nativeHandleD3D12.device = myD3D12Device;
+
+    // Load D3D12 render system
+    LLGL::RenderSystemDescriptor rendererDesc;
+    rendererDesc.moduleName         = "Direct3D12";
+    rendererDesc.nativeHandle       = &nativeHandleD3D12;
+    rendererDesc.nativeHandleSize   = sizeof(nativeHandleD3D12);
+    auto renderer = LLGL::RenderSystem::Load(rendererDesc);
+    \endcode
+    \see RenderSystem::GetNativeHandle
+    \note Currently only supported for OpenGL (Windows and Linux), D3D11, D3D12, and Vulkan.
+    \todo Add support for all other backends.
+    */
+    const void*         nativeHandle        = nullptr;
+
+    /**
+    \brief Specifies the size (in bytes) of the structure \c nativeHandle points to (use \c sizeof with the respective structure). By default 0.
+    \remarks If \c nativeHandle is null then this field is ignored.
+    \see nativeHandle
+    */
+    std::size_t         nativeHandleSize    = 0;
 
     #ifdef LLGL_OS_ANDROID
 
@@ -399,10 +452,12 @@ struct RenderSystemDescriptor
     \endcode
     \note Only supported on: Android.
     */
-    android_app*    androidApp;
+    android_app*        androidApp          = nullptr;
 
     #endif // /LLGL_OS_ANDROID
 };
+
+LLGL_DEPRECATED_IGNORE_PUSH()
 
 /**
 \brief Contains the attributes for all supported rendering features.
@@ -577,8 +632,10 @@ struct RenderingFeatures
 
     /**
     \brief Specifies whether stream-output is supported.
+    \note Only supported with: Direct3D 12, Direct3D 11, OpenGL.
     \see VertexShaderAttributes::outputAttribs
     \see CommandBuffer::BeginStreamOutput
+    \see CommandBuffer::DrawStreamOutput
     \see RenderingLimits::maxStreamOutputs
     */
     bool hasStreamOutputs               = false;
@@ -611,6 +668,8 @@ struct RenderingFeatures
     */
     bool hasRenderCondition             = false;
 };
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 /**
 \brief Contains all rendering limitations such as maximum buffer size, maximum texture resolution etc.
@@ -800,7 +859,7 @@ struct RenderingCapabilities
     /**
     \brief Screen coordinate system origin.
     \remarks This determines the native coordinate space of viewports, scissors, and framebuffers.
-    If the native screen origin is lower-left, LLGL emulates it to always maintain the upper-left as the screen origin.
+    If the native screen origin is in the bottom-left corner, LLGL emulates it to always maintain the upper-left corner as its screen origin.
     */
     ScreenOrigin                    screenOrigin        = ScreenOrigin::UpperLeft;
 
@@ -872,7 +931,7 @@ LLGL::ValidateRenderingCaps(
     myRenderer->GetRenderingCaps(),
     myRequirements,
     [](const std::string& info, const std::string& attrib) {
-        std::cerr << info << ": " << attrib << std::endl;
+        ::fprintf(stderr, "%s: %s\n", info.c_str(), attrib.c_str());
         return true;
     }
 );

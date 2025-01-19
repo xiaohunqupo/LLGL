@@ -8,15 +8,13 @@
 #include <LLGL/Window.h>
 #include <LLGL-C/Window.h>
 #include "C99Internal.h"
+#include "C99EventListenerContainer.h"
 #include "../sources/Core/CoreUtils.h"
 #include "../sources/Core/Exception.h"
 #include <vector>
 #include <string>
 #include <string.h>
 #include <algorithm>
-#include <unordered_map>
-#include <mutex>
-#include <limits.h>
 
 
 // namespace LLGL {
@@ -101,43 +99,7 @@ class InternalWindowEventListener final : public Window::EventListener
 
 };
 
-using InternalWindowEventListenerSPtr = std::shared_ptr<InternalWindowEventListener>;
-
-class WindowEventListenerContainer
-{
-
-    public:
-
-        std::pair<int, InternalWindowEventListenerSPtr> Create(const LLGLWindowEventListener* callbacks)
-        {
-            std::lock_guard<std::mutex> guard{ mutex_ };
-            LLGL_ASSERT(idCounter_ < INT_MAX);
-            const int id = ++idCounter_;
-            std::pair<int, InternalWindowEventListenerSPtr> result{ id, std::make_shared<InternalWindowEventListener>(callbacks) };
-            eventListeners_.insert(result);
-            return result;
-        }
-
-        InternalWindowEventListenerSPtr Release(int id)
-        {
-            std::lock_guard<std::mutex> guard{ mutex_ };
-            auto it = eventListeners_.find(id);
-            if (it != eventListeners_.end())
-            {
-                InternalWindowEventListenerSPtr result = std::move(it->second);
-                eventListeners_.erase(it);
-                return result;
-            }
-            return nullptr;
-        }
-
-    private:
-
-        int                                                         idCounter_      = 0;
-        std::unordered_map<int, InternalWindowEventListenerSPtr>    eventListeners_;
-        std::mutex                                                  mutex_;
-
-};
+using WindowEventListenerContainer = EventListenerContainer<InternalWindowEventListener, LLGLWindowEventListener>;
 
 #undef LLGL_CALLBACK_WRAPPER
 
@@ -215,6 +177,11 @@ LLGL_C_EXPORT void llglSetWindowTitle(LLGLWindow window, const wchar_t* title)
     LLGL_PTR(Window, window)->SetTitle(title);
 }
 
+LLGL_C_EXPORT void llglSetWindowTitleUTF8(LLGLWindow window, const char* title)
+{
+    LLGL_PTR(Window, window)->SetTitle(title);
+}
+
 LLGL_C_EXPORT size_t llglGetWindowTitle(LLGLWindow window, size_t outTitleLength, wchar_t* outTitle)
 {
     UTF8String title = LLGL_PTR(Window, window)->GetTitle();
@@ -225,6 +192,17 @@ LLGL_C_EXPORT size_t llglGetWindowTitle(LLGLWindow window, size_t outTitleLength
         ::memcpy(outTitle, titleUTF16.data(), outTitleLength * sizeof(wchar_t));
     }
     return titleUTF16.size();
+}
+
+LLGL_C_EXPORT size_t llglGetWindowTitleUTF8(LLGLWindow window, size_t outTitleLength, char* outTitle)
+{
+    UTF8String title = LLGL_PTR(Window, window)->GetTitle();
+    if (outTitle != nullptr)
+    {
+        outTitleLength = std::min(outTitleLength, title.size() + 1);
+        ::memcpy(outTitle, title.data(), outTitleLength * sizeof(char));
+    }
+    return title.size() + 1;
 }
 
 LLGL_C_EXPORT void llglShowWindow(LLGLWindow window, bool show)
@@ -281,7 +259,7 @@ LLGL_C_EXPORT int llglAddWindowEventListener(LLGLWindow window, const LLGLWindow
 
 LLGL_C_EXPORT void llglRemoveWindowEventListener(LLGLWindow window, int eventListenerID)
 {
-    if (InternalWindowEventListenerSPtr eventListener = g_WindowEventListenerContainer.Release(eventListenerID))
+    if (auto eventListener = g_WindowEventListenerContainer.Release(eventListenerID))
         LLGL_PTR(Window, window)->RemoveEventListener(eventListener.get());
 }
 

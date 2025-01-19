@@ -68,25 +68,31 @@ class D3D12MipGenerator
 
         void GenerateMips1D(
             D3D12CommandContext&        commandContext,
-            D3D12Resource&              resource,
+            D3D12Texture&               texture,
             ID3D12DescriptorHeap*       mipDescHeap,
-            DXGI_FORMAT                 format,
             const TextureSubresource&   subresource
         );
 
         void GenerateMips2D(
             D3D12CommandContext&        commandContext,
-            D3D12Resource&              resource,
+            D3D12Texture&               texture,
             ID3D12DescriptorHeap*       mipDescHeap,
-            DXGI_FORMAT                 format,
             const TextureSubresource&   subresource
         );
 
         void GenerateMips3D(
             D3D12CommandContext&        commandContext,
-            D3D12Resource&              resource,
+            D3D12Texture&               texture,
             ID3D12DescriptorHeap*       mipDescHeap,
-            DXGI_FORMAT                 format,
+            const TextureSubresource&   subresource
+        );
+
+        void TransitionSourceMipLevel(
+            D3D12CommandContext&        commandContext,
+            D3D12Texture&               texture,
+            D3D12_RESOURCE_STATES       newState,
+            D3D12_RESOURCE_STATES       oldState,
+            UINT                        mipLevel,
             const TextureSubresource&   subresource
         );
 

@@ -129,23 +129,18 @@ public:
         CreateGraphicsPipeline();
 
         // Label objects
-        constantBuffer->SetName("Buffer.Constants");
-        #ifdef ENABLE_STORAGE_TEXTURES
-        vertexBufferNull->SetName("Buffer.Null");
-        #else
-        vertexBufferArray->SetName("BufferArray.Vertices");
-        #endif
-        indexBuffer->SetName("Buffer.Indices");
-        particleBuffers[AttribBase]->SetName("Particles.Base");
-        particleBuffers[AttribCurrPos]->SetName("Particles.CurrentPosition");
-        particleBuffers[AttribNextPos]->SetName("Particles.NextPosition");
-        particleBuffers[AttribPrevPos]->SetName("Particles.PreviousPosition");
-        particleBuffers[AttribVelocity]->SetName("Particles.Velocity");
-        particleBuffers[AttribNormal]->SetName("Particles.Normal");
+        particleBuffers[AttribBase    ]->SetDebugName("Particles.Base");
+        particleBuffers[AttribCurrPos ]->SetDebugName("Particles.CurrentPosition");
+        particleBuffers[AttribNextPos ]->SetDebugName("Particles.NextPosition");
+        particleBuffers[AttribPrevPos ]->SetDebugName("Particles.PreviousPosition");
+        particleBuffers[AttribVelocity]->SetDebugName("Particles.Velocity");
+        particleBuffers[AttribNormal  ]->SetDebugName("Particles.Normal");
 
         // Show some information
-        std::cout << "press LEFT MOUSE BUTTON and move the mouse to rotate the camera" << std::endl;
-        std::cout << "press RIGHT MOUSE BUTTON and move the mouse on the X-axis to change the cloth stiffness" << std::endl;
+        LLGL::Log::Printf(
+            "press LEFT MOUSE BUTTON and move the mouse to rotate the camera\n"
+            "press RIGHT MOUSE BUTTON and move the mouse on the X-axis to change the cloth stiffness\n"
+        );
     }
 
     // Generates the grid geometry for the cloth with triangle strip topology
@@ -168,7 +163,7 @@ public:
             {
                 const auto idx = v * (clothSegmentsU + 1) + u;
 
-                // Set mass for left and righ top particles to infinity to create suspension points
+                // Set mass for left and right top particles to infinity to create suspension points
                 bool isSuspensionPoint = (v == 0 && (u == 0 || u == clothSegmentsU));
 
                 // Initialize base attributes
@@ -309,6 +304,7 @@ public:
         // Create dummy vertex buffer
         LLGL::BufferDescriptor vbNullDesc;
         {
+            vbNullDesc.debugName    = "Buffer.Null";
             vbNullDesc.size         = 1;
             vbNullDesc.bindFlags    = LLGL::BindFlags::VertexBuffer;
         }
@@ -324,12 +320,14 @@ public:
             particleBuffers[AttribBase]     // Read "texCoord" from .xy
         };
         vertexBufferArray = renderer->CreateBufferArray(3, buffers);
+        vertexBufferArray->SetDebugName("BufferArray.Vertices");
 
         #endif
 
         // Create index buffer
         LLGL::BufferDescriptor indexBufferDesc;
         {
+            indexBufferDesc.debugName   = "Buffer.Indices";
             indexBufferDesc.size        = sizeof(std::uint32_t) * indices.size();
             indexBufferDesc.bindFlags   = LLGL::BindFlags::IndexBuffer;
             indexBufferDesc.format      = LLGL::Format::R32UInt;
@@ -369,6 +367,12 @@ public:
             computeShaders[1] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSStretchConstraints.comp" });
             computeShaders[2] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSRelaxation.comp"         });
         }
+        else if (Supported(LLGL::ShadingLanguage::ESSL))
+        {
+            computeShaders[0] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSForces.comp",             "", "310 es" });
+            computeShaders[1] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSStretchConstraints.comp", "", "310 es" });
+            computeShaders[2] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSRelaxation.comp",         "", "310 es" });
+        }
         else if (Supported(LLGL::ShadingLanguage::SPIRV))
         {
             computeShaders[0] = LoadShader({ LLGL::ShaderType::Compute, "Example.CSForces.450core.comp.spv"             });
@@ -391,12 +395,13 @@ public:
                 "cbuffer(SceneState@0):comp,"
                 #ifdef ENABLE_STORAGE_TEXTURES
                 "texture(parBase@1):comp,"
-                "rwtexture(parCurrPos@2, parNextPos@3, parPrevPos@4, parVelocity@5, parNormal@6):comp"
+                "rwtexture(parCurrPos@2, parNextPos@3, parPrevPos@4, parVelocity@5, parNormal@6):comp,"
                 #else
                 "buffer(parBase@1):comp,"
-                "rwbuffer(parCurrPos@2, parNextPos@3, parPrevPos@4, parVelocity@5, parNormal@6):comp"
-                "}"
+                "rwbuffer(parCurrPos@2, parNextPos@3, parPrevPos@4, parVelocity@5, parNormal@6):comp,"
+                "},"
                 #endif // /ENABLE_STORAGE_TEXTURES
+                "barriers{rwbuffer},"
             )
         );
 
@@ -423,7 +428,6 @@ public:
         {
             resourceHeapDesc.pipelineLayout     = computeLayout;
             resourceHeapDesc.numResourceViews   = sizeof(resourceViewsCompute) / sizeof(resourceViewsCompute[0]);
-            resourceHeapDesc.barrierFlags       = LLGL::BarrierFlags::StorageBuffer;
         }
         computeResourceHeap = renderer->CreateResourceHeap(resourceHeapDesc, resourceViewsCompute);
 
@@ -436,7 +440,7 @@ public:
                 pipelineDesc.computeShader  = computeShaders[i];
             }
             computePipelines[i] = renderer->CreatePipelineState(pipelineDesc);
-            ThrowIfFailed(computePipelines[i]);
+            ReportPSOErrors(computePipelines[i]);
         }
     }
 
@@ -452,7 +456,7 @@ public:
             graphicsShaderPipeline.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.hlsl", "VS", "vs_5_0" }, usedVertexFormats, {}, g_shaderMacros);
             graphicsShaderPipeline.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.hlsl", "PS", "ps_5_0" }, {}, g_shaderMacros);
         }
-        else if (Supported(LLGL::ShadingLanguage::GLSL))
+        else if (Supported(LLGL::ShadingLanguage::GLSL) || Supported(LLGL::ShadingLanguage::ESSL))
         {
             graphicsShaderPipeline.vs = LoadShader({ LLGL::ShaderType::Vertex,   "Example.VS.vert" }, usedVertexFormats, {}, g_shaderMacros);
             graphicsShaderPipeline.ps = LoadShader({ LLGL::ShaderType::Fragment, "Example.PS.frag" }, {}, g_shaderMacros);
@@ -475,16 +479,16 @@ public:
 
         graphicsLayout = renderer->CreatePipelineLayout(
             IsMetal() || IsVulkan()
-                ? LLGL::Parse("heap{cbuffer(SceneState@3):vert:frag, texture(colorMap@4):frag, sampler(linearSampler@5):frag, texture(1,2,6):vert}")
-                : LLGL::Parse("heap{cbuffer(SceneState@0):vert:frag, texture(colorMap@0):frag, sampler(linearSampler@0):frag, texture(1,2,3):vert}")
+                ? LLGL::Parse("heap{cbuffer(SceneState@3):vert:frag, texture(colorMap@4):frag, sampler(linearSampler@5):frag, texture(1,2,6):vert}, barriers{rwtexture}")
+                : LLGL::Parse("heap{cbuffer(SceneState@0):vert:frag, texture(colorMap@0):frag, sampler(linearSampler@0):frag, texture(1,2,3):vert}, barriers{rwtexture}")
         );
 
         #else
 
         graphicsLayout = renderer->CreatePipelineLayout(
             IsMetal() || IsVulkan()
-                ? LLGL::Parse("heap{cbuffer(SceneState@3):vert:frag, texture(colorMap@4):frag, sampler(linearSampler@5):frag}")
-                : LLGL::Parse("heap{cbuffer(SceneState@0):vert:frag, texture(colorMap@0):frag, sampler(linearSampler@0):frag}")
+                ? LLGL::Parse("heap{cbuffer(SceneState@3):vert:frag, texture(colorMap@4):frag, sampler(linearSampler@5):frag},")
+                : LLGL::Parse("heap{cbuffer(SceneState@0):vert:frag, texture(colorMap@0):frag, sampler(linearSampler@0):frag},")
         );
 
         #endif // /ENABLE_STORAGE_TEXTURES
@@ -504,7 +508,7 @@ public:
             #endif
         }
         graphicsPipeline = renderer->CreatePipelineState(pipelineDesc);
-        ThrowIfFailed(graphicsPipeline);
+        ReportPSOErrors(graphicsPipeline);
 
         // Create resource heaps for graphics pipeline
         const LLGL::ResourceViewDescriptor resourceViewsGraphics[] =
@@ -522,9 +526,6 @@ public:
         {
             resourceHeapDesc.pipelineLayout     = graphicsLayout;
             resourceHeapDesc.numResourceViews   = sizeof(resourceViewsGraphics) / sizeof(resourceViewsGraphics[0]);
-            #ifdef ENABLE_STORAGE_TEXTURES
-            resourceHeapDesc.barrierFlags       = LLGL::BarrierFlags::StorageTexture;
-            #endif
         }
         graphicsResourceHeap = renderer->CreateResourceHeap(resourceHeapDesc, resourceViewsGraphics);
     }
@@ -547,8 +548,8 @@ private:
         {
             float delta = motion.x*0.01f;
             stiffnessFactor = std::max(0.5f, std::min(stiffnessFactor + delta, 1.0f));
-            std::cout << "stiffness: " << static_cast<int>(stiffnessFactor * 100.0f) << "%    \r";
-            std::flush(std::cout);
+            LLGL::Log::Printf("stiffness: %d%%    \r", static_cast<int>(stiffnessFactor * 100.0f));
+            ::fflush(stdout);
         }
 
         // Update timer
@@ -615,18 +616,6 @@ private:
             }
             commands->PopDebugGroup();
 
-            #ifdef ENABLE_STORAGE_TEXTURES
-            commands->ResetResourceSlots(LLGL::ResourceType::Texture, 2, 5, LLGL::BindFlags::Storage, LLGL::StageFlags::ComputeStage);
-            #else
-            commands->ResetResourceSlots(LLGL::ResourceType::Buffer, 4, 3, LLGL::BindFlags::Storage, LLGL::StageFlags::ComputeStage);
-            #endif
-        }
-        commands->End();
-        commandQueue->Submit(*commands);
-
-        // Record and submit graphics commands
-        commands->Begin();
-        {
             // Draw scene
             commands->BeginRenderPass(*swapChain);
             {
@@ -647,12 +636,6 @@ private:
                 commands->SetPipelineState(*graphicsPipeline);
                 commands->SetResourceHeap(*graphicsResourceHeap);
                 commands->DrawIndexed(numClothIndices, 0);
-
-                #ifdef ENABLE_STORAGE_TEXTURES
-                commands->ResetResourceSlots(LLGL::ResourceType::Texture, 1, 3, LLGL::BindFlags::Sampled, LLGL::StageFlags::VertexStage);
-                #else
-                commands->ResetResourceSlots(LLGL::ResourceType::Buffer, 0, 2, LLGL::BindFlags::VertexBuffer, LLGL::StageFlags::VertexStage);
-                #endif
             }
             commands->EndRenderPass();
         }

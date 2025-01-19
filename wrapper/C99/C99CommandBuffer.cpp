@@ -34,9 +34,9 @@ LLGL_C_EXPORT void llglEnd()
     g_CurrentCmdBuf = NULL;
 }
 
-LLGL_C_EXPORT void llglExecute(LLGLCommandBuffer deferredCommandBuffer)
+LLGL_C_EXPORT void llglExecute(LLGLCommandBuffer secondaryCommandBuffer)
 {
-    g_CurrentCmdBuf->Execute(LLGL_REF(CommandBuffer, deferredCommandBuffer));
+    g_CurrentCmdBuf->Execute(LLGL_REF(CommandBuffer, secondaryCommandBuffer));
 }
 
 LLGL_C_EXPORT void llglUpdateBuffer(LLGLBuffer dstBuffer, uint64_t dstOffset, const void* data, uint16_t dataSize)
@@ -136,7 +136,7 @@ LLGL_C_EXPORT void llglSetResource(uint32_t descriptor, LLGLResource resource)
 
 LLGL_C_EXPORT void llglResetResourceSlots(LLGLResourceType resourceType, uint32_t firstSlot, uint32_t numSlots, long bindFlags, long stageFlags)
 {
-    g_CurrentCmdBuf->ResetResourceSlots((ResourceType)resourceType, firstSlot, numSlots, bindFlags, stageFlags);
+    // deprecated
 }
 
 LLGL_C_EXPORT void llglBeginRenderPass(LLGLRenderTarget renderTarget)
@@ -270,6 +270,11 @@ LLGL_C_EXPORT void llglDrawIndexedIndirect(LLGLBuffer buffer, uint64_t offset)
 LLGL_C_EXPORT void llglDrawIndexedIndirectExt(LLGLBuffer buffer, uint64_t offset, uint32_t numCommands, uint32_t stride)
 {
     g_CurrentCmdBuf->DrawIndexedIndirect(LLGL_REF(Buffer, buffer), offset, numCommands, stride);
+}
+
+LLGL_C_EXPORT void llglDrawStreamOutput()
+{
+    g_CurrentCmdBuf->DrawStreamOutput();
 }
 
 LLGL_C_EXPORT void llglDispatch(uint32_t numWorkGroupsX, uint32_t numWorkGroupsY, uint32_t numWorkGroupsZ)

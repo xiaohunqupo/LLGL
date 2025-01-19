@@ -25,6 +25,7 @@
 
 #include "RenderState/MTPipelineLayout.h"
 #include "RenderState/MTPipelineState.h"
+#include "RenderState/MTQueryHeap.h"
 #include "RenderState/MTResourceHeap.h"
 #include "RenderState/MTRenderPass.h"
 #include "RenderState/MTFence.h"
@@ -51,13 +52,17 @@ class MTRenderSystem final : public RenderSystem
 
     public:
 
-        MTRenderSystem();
+        MTRenderSystem(const RenderSystemDescriptor& renderSystemDesc);
         ~MTRenderSystem();
 
     private:
 
-        void CreateDeviceResources();
-        void QueryRenderingCaps();
+        #include <LLGL/Backend/RenderSystem.Internal.inl>
+
+    private:
+
+        void CreateDeviceResources(id<MTLDevice> sharedDevice = nil);
+        void QueryRendererInfo(RendererInfo& outInfo);
 
         const char* QueryMetalVersion() const;
 
@@ -88,7 +93,7 @@ class MTRenderSystem final : public RenderSystem
         HWObjectInstance<ProxyPipelineCache>    pipelineCacheProxy_;
         HWObjectContainer<MTPipelineState>  	pipelineStates_;
         HWObjectContainer<MTResourceHeap>       resourceHeaps_;
-        //HWObjectContainer<MTQueryHeap>          queryHeaps_;
+        HWObjectContainer<MTQueryHeap>          queryHeaps_;
         HWObjectContainer<MTFence>              fences_;
 
 };

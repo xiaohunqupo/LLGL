@@ -8,13 +8,17 @@
 #include "Testbed.h"
 #include <LLGL/Container/DynamicArray.h>
 #include <LLGL/Container/SmallVector.h>
-#include <LLGL/Container/UTF8String.h>
 #include <LLGL/Container/Strings.h>
+#include <LLGL/Utils/ForRange.h>
 #include <locale>
-#include <codecvt>
+#include <codecvt> //TODO: replace this as it's deprecated in C++17
+#include <string>
+#include <vector>
+#include <initializer_list>
+#include <algorithm>
 
 
-TestResult TestbedContext::TestContainerDynamicArray()
+DEF_RITEST( ContainerDynamicArray )
 {
     // Test byte array
     const char* cmp8BytesZero   = "\0\0\0\0\0\0\0\0";
@@ -130,7 +134,7 @@ TestResult TestbedContext::TestContainerDynamicArray()
     return TestResult::Passed;
 }
 
-TestResult TestbedContext::TestContainerSmallVector()
+DEF_RITEST( ContainerSmallVector )
 {
     constexpr int cmpInt16[16] = { 1,2,3,4, 42,3476,93,-12, 0xFF,0xCD,0x10,0xDE, 384723,901872,-874673,1234567 };
     constexpr int cmpInt4[4] = { 4,3,2,1 };
@@ -230,7 +234,7 @@ TestResult TestbedContext::TestContainerSmallVector()
     return TestResult::Passed;
 }
 
-TestResult TestbedContext::TestContainerUTF8String()
+DEF_RITEST( ContainerUTF8String )
 {
     // Test UTF8String concatentation
     UTF8String sa1 = "Hello";
@@ -317,6 +321,224 @@ TestResult TestbedContext::TestContainerUTF8String()
 
         sa6.clear();
     }
+
+    return TestResult::Passed;
+}
+
+struct TestLinearAllocator
+{
+    char* allocate(std::size_t n, const void* hint = nullptr)
+    {
+        char* p = &(TestLinearAllocator::data[pos]);
+        TestLinearAllocator::pos += n;
+        TestLinearAllocator::counter += n;
+        return p;
+    }
+
+    void deallocate(char* p, std::size_t n)
+    {
+        // dummy
+    }
+
+    static std::size_t GetAndFlushCounter()
+    {
+        std::size_t n = TestLinearAllocator::counter;
+        TestLinearAllocator::counter = 0;
+        return n;
+    }
+
+    static constexpr std::size_t capacity = 1024;
+    static std::size_t counter;
+    static std::size_t pos;
+    static char data[capacity];
+};
+
+std::size_t TestLinearAllocator::counter = 0;
+std::size_t TestLinearAllocator::pos = 0;
+char TestLinearAllocator::data[capacity];
+
+DEF_RITEST( ContainerStringLiteral )
+{
+    // Test reference and dynamic string literals
+    {
+        StringLiteral l0 = "This is a string literal";
+        StringLiteral l1 = StringLiteral{ l0.c_str(), true };
+
+        if (l0 != l1)
+        {
+            Log::Errorf("Mismatch between reference and dynamic string literals: l0=\"%s\" and l1=\"%s\"\n", l0.c_str(), l1.c_str());
+            return TestResult::FailedMismatch;
+        }
+    }
+
+    // Test dynamic strings with custom allocator to track allocation size
+    {
+        using TestStringLiteral = BasicStringLiteral<char, std::char_traits<char>, TestLinearAllocator>;
+
+        TestStringLiteral l2 = "This is a reference string literal";
+        const std::size_t l2DynamicLen = TestLinearAllocator::GetAndFlushCounter();
+
+        TestStringLiteral l3 = StringView{ "This is a dynamic string literal" };
+        const std::size_t l3DynamicLen = TestLinearAllocator::GetAndFlushCounter();
+
+        const std::size_t commonSubstrLen = TestStringLiteral{ "This is a " }.size();
+        if (l2.compare(0, commonSubstrLen, l3, 0, commonSubstrLen) != 0)
+        {
+            Log::Errorf("Mismatch between reference and dynamic sub-string literals:\n -> l2 = \"%s\" and l3 = \"%s\"\n", l2.c_str(), l3.c_str());
+            return TestResult::FailedMismatch;
+        }
+
+        if (l2DynamicLen != 0)
+        {
+            Log::Errorf("Expected l2 string to be reference, but dynamic length is %zu\n", l2DynamicLen);
+            return TestResult::FailedMismatch;
+        }
+
+        if (l3DynamicLen != l3.size() + 1)
+        {
+            Log::Errorf("Expected l3 string to be dynamic with length %zu, but length is %zu\n", (l3.size() + 1), l3DynamicLen);
+            return TestResult::FailedMismatch;
+        }
+
+        // Use after copy
+        l2 = l3;
+        if (l2 != l3)
+        {
+            Log::Errorf("Expected l2 and l3 strings to be equal:\n -> l2 = \"%s\" and l3 = \"%s\"\n", l2.c_str(), l3.c_str());
+            return TestResult::FailedMismatch;
+        }
+
+        // Use after move
+        l2 = std::move(l3);
+        if (l2 == l3)
+        {
+            Log::Errorf("Expected l2 and l3 strings to be non-equal:\n -> l2 = \"%s\" and l3 = \"%s\"\n", l2.c_str(), l3.c_str());
+            return TestResult::FailedMismatch;
+        }
+
+        l2.clear();
+        l3.clear();
+    }
+
+    // Test string view to literal conversion
+    {
+        StringLiteral l4 = "This is a slightly longer string to test memory boundaries.";
+        StringLiteral l5 = StringView{ l4 };
+
+        if (l4 != l5)
+        {
+            Log::Errorf("Mismatch between reference and dynamic string literals: l4=\"%s\" and l5=\"%s\"\n", l4.c_str(), l5.c_str());
+            return TestResult::FailedMismatch;
+        }
+    }
+
+    // Test absence of ambiguity (Compile-time only test)
+    {
+        StringLiteral l6{ std::string("Test") };
+        StringLiteral l7{ l6 };
+    }
+
+    return TestResult::Passed;
+}
+
+// Fills a list of STL strings and LLGL's own strings with the same entries.
+// Then sorts them with std::sort() and ensures that both lists are ordered equally.
+template <typename T>
+TestResult TestStringSort(const std::initializer_list<const char*> inStrings, bool sanityCheck, const char* llglStringTypeName)
+{
+    // Fill both STL and LLGL string containers
+    std::vector<std::string> stdStrings;
+    DynamicVector<T> llglStrings;
+
+    stdStrings.reserve(inStrings.size());
+    llglStrings.reserve(inStrings.size());
+
+    for (const char* s : inStrings)
+    {
+        stdStrings.push_back(s);
+        llglStrings.push_back(s);
+    }
+
+    // Sort both containers
+    std::sort(stdStrings.begin(), stdStrings.end());
+    std::sort(llglStrings.begin(), llglStrings.end());
+
+    // Ensure both containers are equally sorted
+    if (stdStrings.size() != llglStrings.size())
+    {
+        Log::Errorf(
+            "Mismatch between STL string container size (%zu) and LLGL string container size (%zu)\n",
+            stdStrings.size(), llglStrings.size()
+        );
+        return TestResult::FailedMismatch;
+    }
+
+    auto PrintStringChart = [&stdStrings, &llglStrings, llglStringTypeName](bool printAsErrors) -> void
+    {
+        constexpr std::size_t chartColumnDist = 20; // Distance between beginning of "STL strings:" and "LLGL strings:"
+        const char* caption =
+        (
+            "std::string         %s\n"
+            "-----------         %s\n"
+        );
+        const std::string llglStringTypeUnderline(::strlen(llglStringTypeName), '-');
+
+        if (printAsErrors)
+            Log::Errorf(caption, llglStringTypeName, llglStringTypeUnderline.c_str());
+        else
+            Log::Printf(Log::ColorFlags::StdAnnotation, caption, llglStringTypeName, llglStringTypeUnderline.c_str());
+
+        for_range(i, stdStrings.size())
+        {
+            const std::string lhs{ stdStrings[i].data(), stdStrings[i].size() };
+            const std::string rhs{ llglStrings[i].data(), llglStrings[i].size() };
+            const std::string spaces(lhs.size() < chartColumnDist ? chartColumnDist - lhs.size() : 1, ' ');
+
+            if (printAsErrors)
+                Log::Errorf("%s%s%s\n", lhs.c_str(), spaces.c_str(), rhs.c_str());
+            else
+                Log::Printf(Log::ColorFlags::StdAnnotation, "%s%s%s\n", lhs.c_str(), spaces.c_str(), rhs.c_str());
+        }
+
+        Log::Printf("\n");
+    };
+
+    for_range(i, stdStrings.size())
+    {
+        if (stdStrings[i].size() != llglStrings[i].size() ||
+            ::strncmp(stdStrings[i].data(), llglStrings[i].data(), stdStrings[i].size()) != 0)
+        {
+            // Print list side by side
+            Log::Errorf("Mismatch between order of sorted STL string container and LLGL string container:\n");
+            PrintStringChart(true);
+            return TestResult::FailedMismatch;
+        }
+    }
+
+    // Print sorted list for sanity check
+    if (sanityCheck)
+        PrintStringChart(false);
+
+    return TestResult::Passed;
+}
+
+DEF_RITEST( ContainerStringOperators )
+{
+    std::initializer_list<const char*> inStrings
+    {
+        "Hello", "World", "!", "This", "string", "must", "be", "properly", "sorted", ".", "5", "4", "3", "2", "1", "Go!"
+    };
+
+    #define TEST_STRING_OPERATORS(TYPE)                                                     \
+        {                                                                                   \
+            TestResult result = TestStringSort<TYPE>(inStrings, opt.sanityCheck, #TYPE);    \
+            if (result != TestResult::Passed)                                               \
+                return result;                                                              \
+        }
+
+    TEST_STRING_OPERATORS(LLGL::UTF8String);
+    TEST_STRING_OPERATORS(LLGL::StringView);
+    TEST_STRING_OPERATORS(LLGL::StringLiteral);
 
     return TestResult::Passed;
 }

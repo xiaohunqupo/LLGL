@@ -8,7 +8,9 @@
 #include "SpirvReflect.h"
 #include "SpirvModule.h"
 #include "../../Core/CoreUtils.h"
+#include "../../Core/Assertion.h"
 #include <string>
+#include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
@@ -31,7 +33,7 @@ SpirvResult SpirvReflect::Reflect(const SpirvModuleView& module)
     names_.Reset(header.idBound);
 
     /* Parse each SPIR-V instruction in the module */
-    for (SpirvInstruction instr : module)
+    for (const SpirvInstruction& instr : module)
     {
         if (instr.opcode == spv::Op::OpFunction)
         {
@@ -45,6 +47,18 @@ SpirvResult SpirvReflect::Reflect(const SpirvModuleView& module)
     }
 
     return SpirvResult::NoError;
+}
+
+const SpirvReflect::SpvType* SpirvReflect::GetPushConstantStructType() const
+{
+    if (pushConstantTypeId_ != 0)
+    {
+        /* Find push constant pointer type and deference to its struct type */
+        auto it = types_.find(pushConstantTypeId_);
+        if (it != types_.end())
+            return it->second.Deref();
+    }
+    return nullptr;
 }
 
 static void ParseSpvExecutionMode(const SpirvInstruction& instr, SpirvReflect::SpvExecutionMode& outExecutionMode)
@@ -90,7 +104,7 @@ SpirvResult SpirvReflectExecutionMode(const SpirvModuleView& module, SpirvReflec
     /* Parse each SPIR-V instruction in the module */
     bool firstModeParsed = false;
 
-    for (SpirvInstruction instr : module)
+    for (const SpirvInstruction& instr : module)
     {
         if (instr.opcode == spv::Op::OpExecutionMode)
         {
@@ -109,7 +123,7 @@ SpirvResult SpirvReflectExecutionMode(const SpirvModuleView& module, SpirvReflec
 
 static spv::Id FindGlobalPushConstantVariableType(const SpirvModuleView& module)
 {
-    for (SpirvInstruction instr : module)
+    for (const SpirvInstruction& instr : module)
     {
         if (instr.opcode == spv::Op::OpVariable)
         {
@@ -132,7 +146,7 @@ static spv::Id FindGlobalPushConstantVariableType(const SpirvModuleView& module)
 
 static spv::Id FindPointerTypeSubtype(const SpirvModuleView& module, spv::Id pointerTypeId)
 {
-    for (SpirvInstruction instr : module)
+    for (const SpirvInstruction& instr : module)
     {
         if (instr.opcode == spv::Op::OpTypePointer)
         {
@@ -177,7 +191,7 @@ SpirvResult SpirvReflectPushConstants(const SpirvModuleView& module, SpirvReflec
     };
 
     /* Now parse SPIR-V module for block name, its member names, and member offsets */
-    for (SpirvInstruction instr : module)
+    for (const SpirvInstruction& instr : module)
     {
         if (instr.opcode == spv::Op::OpFunction)
         {
@@ -317,6 +331,8 @@ SpirvResult SpirvReflect::ParseInstruction(const SpirvInstruction& instr)
     {
         case spv::Op::OpName:
             return OpName(instr);
+        case spv::Op::OpMemberName:
+            return OpMemberName(instr);
         case spv::Op::OpDecorate:
             return OpDecorate(instr);
         case spv::Op::OpTypeVoid:
@@ -351,6 +367,17 @@ SpirvResult SpirvReflect::OpName(const Instr& instr)
         return SpirvResult::IdOutOfBounds;
 
     names_.Set(id, instr.GetString(1));
+    return SpirvResult::NoError;
+}
+
+SpirvResult SpirvReflect::OpMemberName(const Instr& instr)
+{
+    SpvMemberNames& memberNames = memberNames_[instr.type];
+    const std::uint32_t memberIndex = instr.GetUInt32(0);
+    if (memberNames.names.size() <= memberIndex)
+        memberNames.names.resize(memberIndex + 1);
+
+    memberNames.names[memberIndex] = instr.GetString(1);
     return SpirvResult::NoError;
 }
 
@@ -422,7 +449,6 @@ SpirvResult SpirvReflect::OpVariable(const Instr& instr)
     {
         case spv::StorageClassUniform:
         case spv::StorageClassUniformConstant:
-        //case spv::StorageClass::PushConstant:
         {
             auto& var = uniforms_[instr.result];
             {
@@ -436,6 +462,12 @@ SpirvResult SpirvReflect::OpVariable(const Instr& instr)
                 else
                     var.size = var.type->size;
             }
+        }
+        break;
+
+        case spv::StorageClassPushConstant:
+        {
+            pushConstantTypeId_ = instr.type;
         }
         break;
 
@@ -611,13 +643,26 @@ static void AccumulateSizeInVectorBoundary(std::uint32_t& size, std::uint32_t al
 
 void SpirvReflect::OpTypeStruct(const Instr& instr, SpvType& type)
 {
-    type.fieldTypes.reserve(instr.numOperands);
-    for (std::uint32_t i = 0; i < instr.numOperands; ++i)
+    type.fieldTypes.resize(instr.numOperands);
+    for_range(i, instr.numOperands)
     {
-        auto fieldType = FindType(instr.GetUInt32(i));
-        type.fieldTypes.push_back(fieldType);
+        const SpvType* fieldType = FindType(instr.GetUInt32(i));
+        type.fieldTypes[i] = fieldType;
         AccumulateSizeInVectorBoundary(type.size, 16, fieldType->size);
     }
+
+    /* Also append field names */
+    auto memberNamesIt = memberNames_.find(type.result);
+    if (memberNamesIt != memberNames_.end())
+    {
+        if (instr.numOperands == memberNamesIt->second.names.size())
+        {
+            type.fieldNames.resize(instr.numOperands);
+            for_range(i, instr.numOperands)
+                type.fieldNames[i] = memberNamesIt->second.names[i];
+        }
+    }
+
     type.size = GetAlignedSize(type.size, 16u);
 }
 
@@ -640,16 +685,14 @@ void SpirvReflect::OpTypeFunction(const Instr& instr, SpvType& type)
 const SpirvReflect::SpvType* SpirvReflect::FindType(spv::Id id) const
 {
     auto it = types_.find(id);
-    if (it == types_.end())
-        throw std::runtime_error("cannot find SPIR-V OpType* instruction with result ID %" + std::to_string(id));
+    LLGL_ASSERT(it != types_.end(), "cannot find SPIR-V OpType* instruction with result ID %%%u", id);
     return &(it->second);
 }
 
 const SpirvReflect::SpvConstant* SpirvReflect::FindConstant(spv::Id id) const
 {
     auto it = constants_.find(id);
-    if (it == constants_.end())
-        throw std::runtime_error("cannot find SPIR-V OpConstant instruction with with result ID %" + std::to_string(id));
+    LLGL_ASSERT(it != constants_.end(), "cannot find SPIR-V OpConstant instruction with with result ID %%%u", id);
     return &(it->second);
 }
 

@@ -13,6 +13,7 @@
 #include <LLGL/Types.h>
 #include <LLGL/VertexAttribute.h>
 #include <LLGL/FragmentAttribute.h>
+#include <LLGL/Deprecated.h>
 #include <cstddef>
 #include <vector>
 
@@ -225,9 +226,10 @@ struct ShaderMacro
 };
 
 /**
-\brief Vertex (or geometry) shader specific structure.
+\brief Vertex (or geometry or tessellation-evaluation) shader specific structure.
 \see ShaderDescriptor::vertex
 \see ShaderReflection::vertex
+\todo Merge this into one structure \c ShaderAttributes with fields \c vertexAttribs, \c streamOutputAttribs, \c fragmentAttribs, and \c workGroupSize.
 */
 struct VertexShaderAttributes
 {
@@ -240,10 +242,15 @@ struct VertexShaderAttributes
     std::vector<VertexAttribute> inputAttribs;
 
     /**
-    \brief Vertex (or geometry) shader stream-output attributes.
+    \brief Vertex (or geometry or tessellation-evaluation) shader stream-output attributes.
     \remarks Some rendering APIs need the output stream attributes for the vertex shader and other APIs need them for the geometry shader.
     To keep the code logic simple, it is valid to declare the output attributes for both the vertex and geometry shader (or even all that will be used in the same shader program).
     Output attributes are ignored where they cannot be used.
+    \remarks Stream-output attributes can only have 32-bit floating-point formats, i.e. only the following formats are supported:
+    - Format::R32Float
+    - Format::RG32Float
+    - Format::RGB32Float
+    - Format::RGBA32Float
     \see RenderingFeatures::hasStreamOutputs
     \see CommandBuffer::BeginStreamOutput
     */
@@ -279,6 +286,8 @@ struct ComputeShaderAttributes
     Extent3D workGroupSize = { 1, 1, 1 };
 };
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 /**
 \brief Shader source and binary code descriptor structure.
 \see RenderSystem::CreateShader
@@ -286,6 +295,7 @@ struct ComputeShaderAttributes
 struct ShaderDescriptor
 {
     ShaderDescriptor() = default;
+
     ShaderDescriptor(const ShaderDescriptor&) = default;
     ShaderDescriptor& operator = (const ShaderDescriptor&) = default;
 
@@ -311,6 +321,14 @@ struct ShaderDescriptor
         flags      { flags      }
     {
     }
+
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \remarks For the HLSL backend, this will also be used as shader name if the shader is provided in source form.
+    \see RenderSystemChild::SetName
+    */
+    const char*                 debugName       = nullptr;
 
     //! Specifies the type of the shader, i.e. if it is either a vertex or fragment shader or the like. By default ShaderType::Undefined.
     ShaderType                  type            = ShaderType::Undefined;
@@ -383,14 +401,8 @@ struct ShaderDescriptor
     */
     long                        flags           = 0;
 
-    /**
-    \brief Optional pointer to the shader's name string. This is either a null terminated string or null.
-    \remarks HLSL will automatically detect if this is null, and if the shader type is
-    ShaderSourceType::CodeFile the value at \c source will automatically be used.
-    This is currently only supported on HLSL, and other backends will ignore this parameter.
-    \see sourceType
-    \note Only supported with: HLSL.
-    */
+    //! \deprecated Since 0.04b; Use ShaderDescriptor::debugName instead.
+    LLGL_DEPRECATED("ShaderDescriptor::name is deprecated since 0.04b; Use ShaderDescriptor::debugName instead!", "debugName")
     const char*                 name            = nullptr;
 
     //! Vertex (or geometry) shader specific attributes.
@@ -406,6 +418,8 @@ struct ShaderDescriptor
     */
     ComputeShaderAttributes     compute;
 };
+
+LLGL_DEPRECATED_IGNORE_POP()
 
 
 /* ----- Functions ----- */

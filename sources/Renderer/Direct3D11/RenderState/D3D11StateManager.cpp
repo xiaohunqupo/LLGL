@@ -8,6 +8,7 @@
 #include "D3D11StateManager.h"
 #include "../Texture/D3D11Sampler.h"
 #include "../../../Core/MacroUtils.h"
+#include "../../../Core/Assertion.h"
 #include <LLGL/Utils/ForRange.h>
 #include <algorithm>
 #include <cstddef>
@@ -17,10 +18,34 @@ namespace LLGL
 {
 
 
+#if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
+
+/*
+Returns true if the D3D runtime supports command lists natively.
+Otherwise, they will be emulated by the D3D runtime and all *SetConstantBuffers1() functions need a workaround as described here:
+See https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-vssetconstantbuffers1#calling-vssetconstantbuffers1-with-command-list-emulation
+*/
+static bool D3DSupportsDriverCommandLists(ID3D11Device* device)
+{
+    D3D11_FEATURE_DATA_THREADING threadingCaps = { FALSE, FALSE };
+    HRESULT hr = device->CheckFeatureSupport(D3D11_FEATURE_THREADING, &threadingCaps, sizeof(threadingCaps));
+    return (SUCCEEDED(hr) && threadingCaps.DriverCommandLists != FALSE);
+}
+
+#endif
+
+/*
+Note:
+  Maximum size for D3D11 cbuffer is 'D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT * 4 * sizeof(float)'
+  The chunk size doesn't have to exhaust this size limit, but 4096 happens to be the same value as D3D11_REQ_CONSTANT_BUFFER_ELEMENT_COUNT.
+*/
 static constexpr UINT g_cbufferChunkSize = 4096u;
 
 D3D11StateManager::D3D11StateManager(ID3D11Device* device, const ComPtr<ID3D11DeviceContext>& context) :
-    context_ { context },
+    context_                   { context                                },
+    #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
+    needsCommandListEmulation_ { !D3DSupportsDriverCommandLists(device) },
+    #endif
     stagingCbufferPool_
     {
         device,
@@ -29,7 +54,8 @@ D3D11StateManager::D3D11StateManager(ID3D11Device* device, const ComPtr<ID3D11De
         D3D11_USAGE_DYNAMIC,
         D3D11_CPU_ACCESS_WRITE,
         D3D11_BIND_CONSTANT_BUFFER
-    }
+    },
+    bindingTable_ { context }
 {
     #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
     context_->QueryInterface(IID_PPV_ARGS(&context1_));
@@ -66,10 +92,10 @@ void D3D11StateManager::SetViewports(std::uint32_t numViewports, const Viewport*
         /* Convert viewport into D3D viewport */
         D3D11_VIEWPORT viewportsD3D[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 
-        for (std::uint32_t i = 0; i < numViewports; ++i)
+        for_range(i, numViewports)
         {
-            const auto& src = viewportArray[i];
-            auto& dst       = viewportsD3D[i];
+            const Viewport& src = viewportArray[i];
+            D3D11_VIEWPORT& dst = viewportsD3D[i];
 
             dst.TopLeftX    = src.x;
             dst.TopLeftY    = src.y;
@@ -89,10 +115,10 @@ void D3D11StateManager::SetScissors(std::uint32_t numScissors, const Scissor* sc
 
     D3D11_RECT scissorsD3D[D3D11_VIEWPORT_AND_SCISSORRECT_OBJECT_COUNT_PER_PIPELINE];
 
-    for (std::uint32_t i = 0; i < numScissors; ++i)
+    for_range(i, numScissors)
     {
-        const auto& src = scissorArray[i];
-        auto& dst       = scissorsD3D[i];
+        const Scissor&  src = scissorArray[i];
+        D3D11_RECT&     dst = scissorsD3D[i];
 
         dst.left        = src.x;
         dst.top         = src.y;
@@ -285,12 +311,108 @@ void D3D11StateManager::SetConstantBuffersRange(
     if (context1_ != nullptr)
     {
         /* Bind buffer range to shader stage */
-        if (LLGL_VS_STAGE(stageFlags)) { context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
-        if (LLGL_HS_STAGE(stageFlags)) { context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
-        if (LLGL_DS_STAGE(stageFlags)) { context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
-        if (LLGL_GS_STAGE(stageFlags)) { context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
-        if (LLGL_PS_STAGE(stageFlags)) { context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
-        if (LLGL_CS_STAGE(stageFlags)) { context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+        if (needsCommandListEmulation_)
+        {
+            /*
+            When command lists are emulated by the D3D runtime, the beginning and end of the cbuffer range must be temporarily unbound as described here:
+            https://learn.microsoft.com/en-us/windows/win32/api/d3d11_1/nf-d3d11_1-id3d11devicecontext1-vssetconstantbuffers1#calling-vssetconstantbuffers1-with-command-list-emulation
+            */
+            ID3D11Buffer* const nullBuffer[2] = { nullptr, nullptr };
+            if (count > 2)
+            {
+                const UINT endSlot = startSlot + count - 1;
+                if (LLGL_VS_STAGE(stageFlags))
+                {
+                    context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->VSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->VSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_HS_STAGE(stageFlags))
+                {
+                    context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->HSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->HSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_DS_STAGE(stageFlags))
+                {
+                    context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->DSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->DSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_GS_STAGE(stageFlags))
+                {
+                    context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->GSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->GSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_PS_STAGE(stageFlags))
+                {
+                    context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->PSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->PSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_CS_STAGE(stageFlags))
+                {
+                    context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->CSSetConstantBuffers(startSlot, 1, nullBuffer);
+                    context1_->CSSetConstantBuffers(endSlot, 1, nullBuffer);
+                    context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+            }
+            else
+            {
+                if (LLGL_VS_STAGE(stageFlags))
+                {
+                    context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->VSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_HS_STAGE(stageFlags))
+                {
+                    context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->HSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_DS_STAGE(stageFlags))
+                {
+                    context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->DSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_GS_STAGE(stageFlags))
+                {
+                    context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->GSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_PS_STAGE(stageFlags))
+                {
+                    context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->PSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+                if (LLGL_CS_STAGE(stageFlags))
+                {
+                    context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                    context1_->CSSetConstantBuffers(startSlot, count, nullBuffer);
+                    context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants);
+                }
+            }
+        }
+        else
+        {
+            if (LLGL_VS_STAGE(stageFlags)) { context1_->VSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+            if (LLGL_HS_STAGE(stageFlags)) { context1_->HSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+            if (LLGL_DS_STAGE(stageFlags)) { context1_->DSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+            if (LLGL_GS_STAGE(stageFlags)) { context1_->GSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+            if (LLGL_PS_STAGE(stageFlags)) { context1_->PSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+            if (LLGL_CS_STAGE(stageFlags)) { context1_->CSSetConstantBuffers1(startSlot, count, buffers, firstConstants, numConstants); }
+        }
     }
     else
     #endif
@@ -299,8 +421,11 @@ void D3D11StateManager::SetConstantBuffersRange(
         #ifdef LLGL_DEBUG
         for_range(i, count)
         {
-            if (firstConstants[i] > 0)
-                throw std::runtime_error("constant buffer range is only supported with Direct3D 11.1 or later");
+            LLGL_ASSERT(
+                firstConstants[i] == 0,
+                "constant buffer range is only supported with Direct3D 11.1 or later, but [%u, %u+%u) was specified for slot %u",
+                firstConstants[i], firstConstants[i], numConstants[i], (startSlot + i)
+            );
         }
         #endif
 
@@ -311,48 +436,6 @@ void D3D11StateManager::SetConstantBuffersRange(
         if (LLGL_GS_STAGE(stageFlags)) { context_->GSSetConstantBuffers(startSlot, count, buffers); }
         if (LLGL_PS_STAGE(stageFlags)) { context_->PSSetConstantBuffers(startSlot, count, buffers); }
         if (LLGL_CS_STAGE(stageFlags)) { context_->CSSetConstantBuffers(startSlot, count, buffers); }
-    }
-}
-
-void D3D11StateManager::SetShaderResources(
-    UINT                                startSlot,
-    UINT                                count,
-    ID3D11ShaderResourceView* const*    views,
-    long                                stageFlags)
-{
-    if (LLGL_VS_STAGE(stageFlags)) { context_->VSSetShaderResources(startSlot, count, views); }
-    if (LLGL_HS_STAGE(stageFlags)) { context_->HSSetShaderResources(startSlot, count, views); }
-    if (LLGL_DS_STAGE(stageFlags)) { context_->DSSetShaderResources(startSlot, count, views); }
-    if (LLGL_GS_STAGE(stageFlags)) { context_->GSSetShaderResources(startSlot, count, views); }
-    if (LLGL_PS_STAGE(stageFlags)) { context_->PSSetShaderResources(startSlot, count, views); }
-    if (LLGL_CS_STAGE(stageFlags)) { context_->CSSetShaderResources(startSlot, count, views); }
-}
-
-void D3D11StateManager::SetUnorderedAccessViews(
-    UINT                                startSlot,
-    UINT                                count,
-    ID3D11UnorderedAccessView* const*   views,
-    const UINT*                         initialCounts,
-    long                                stageFlags)
-{
-    if (LLGL_PS_STAGE(stageFlags))
-    {
-        /* Set UAVs for pixel shader stage */
-        context_->OMSetRenderTargetsAndUnorderedAccessViews(
-            /*NumRTVs:*/                D3D11_KEEP_RENDER_TARGETS_AND_DEPTH_STENCIL,
-            /*ppRenderTargetViews:*/    nullptr,
-            /*pDepthStencilView:*/      nullptr,
-            /*UAVStartSlot:*/           startSlot,
-            /*NumUAVs:*/                count,
-            /*ppUnorderedAccessViews:*/ views,
-            /*pUAVInitialCounts:*/      initialCounts
-        );
-    }
-
-    if (LLGL_CS_STAGE(stageFlags))
-    {
-        /* Set UAVs for compute shader stage */
-        context_->CSSetUnorderedAccessViews(startSlot, count, views, initialCounts);
     }
 }
 
@@ -392,29 +475,52 @@ void D3D11StateManager::SetComputeStaticSampler(const D3D11StaticSampler& static
 
 void D3D11StateManager::SetConstants(UINT slot, const void* data, UINT dataSize, long stageFlags)
 {
-    /* Write data to intermediate constant buffer */
-    constexpr UINT cbufferUpdateAlignment = 16*16;
-    auto bufferRange = stagingCbufferPool_.Write(data, dataSize, cbufferUpdateAlignment);
+    /*
+    Write data to intermediate constant buffer and use alignment of 16 vector registers (256 bytes)
+    as this is required by ID3D11DeviceContext::*SetConstantBuffers1() functions. From D3D debug layer:
+    "All constant buffer offsets and counts must be multiples of 16 and the counts must be at most 4096."
+    */
+    constexpr UINT cbufferVectorAlignment = 16;
+    constexpr UINT cbufferUpdateAlignment = cbufferVectorAlignment*16;
+    D3D11BufferRange bufferRange = stagingCbufferPool_.Write(data, dataSize, cbufferUpdateAlignment);
 
     /* Bind intermediate buffer to buffer range */
     ID3D11Buffer* buffers[]        = { bufferRange.native };
-    const UINT    firstConstants[] = { bufferRange.offset / 16 };
-    const UINT    numConstants[]   = { bufferRange.size / 16 };
+    const UINT    firstConstants[] = { bufferRange.offset / cbufferVectorAlignment };
+    const UINT    numConstants[]   = { bufferRange.size   / cbufferVectorAlignment };
 
     SetConstantBuffersRange(slot, 1, buffers, firstConstants, numConstants, stageFlags);
 }
 
 void D3D11StateManager::DispatchBuiltin(const D3D11BuiltinShader builtinShader, UINT numWorkGroupsX, UINT numWorkGroupsY, UINT numWorkGroupsZ)
 {
-    ID3D11ComputeShader* cs = D3D11BuiltinShaderFactory::Get().GetBulitinShader(builtinShader).cs.Get();
+    ID3D11ComputeShader* cs = D3D11BuiltinShaderFactory::Get().GetBulitinComputeShader(builtinShader);
     context_->CSSetShader(cs, nullptr, 0);
     context_->Dispatch(numWorkGroupsX, numWorkGroupsY, numWorkGroupsZ);
     context_->CSSetShader(shaderState_.cs, nullptr, 0);
 }
 
-void D3D11StateManager::ResetStagingBufferPools()
+void D3D11StateManager::ResetCbufferPool()
 {
     stagingCbufferPool_.Reset();
+}
+
+void D3D11StateManager::ClearState()
+{
+    /* Clear device context state */
+    context_->ClearState();
+    ClearCache();
+}
+
+void D3D11StateManager::ClearCache()
+{
+    /* Clear binding table state */
+    bindingTable_.ClearState();
+
+    /* Invalidate internal caches */
+    inputAssemblyState_ = {};
+    shaderState_        = {};
+    renderState_        = {};
 }
 
 

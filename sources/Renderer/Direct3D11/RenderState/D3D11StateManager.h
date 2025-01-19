@@ -9,13 +9,14 @@
 #define LLGL_D3D11_STATE_MANAGER_H
 
 
-#include "../../DXCommon/ComPtr.h"
+#include "D3D11BindingTable.h"
+#include "../Direct3D11.h"
 #include "../Shader/D3D11BuiltinShaderFactory.h"
 #include "../Buffer/D3D11StagingBufferPool.h"
+#include "../../DXCommon/ComPtr.h"
 #include <LLGL/PipelineStateFlags.h>
 #include <vector>
 #include <cstdint>
-#include "../Direct3D11.h"
 
 
 namespace LLGL
@@ -70,21 +71,6 @@ class D3D11StateManager
             long                    stageFlags
         );
 
-        void SetShaderResources(
-            UINT                                startSlot,
-            UINT                                count,
-            ID3D11ShaderResourceView* const*    views,
-            long                                stageFlags
-        );
-
-        void SetUnorderedAccessViews(
-            UINT                                startSlot,
-            UINT                                count,
-            ID3D11UnorderedAccessView* const*   views,
-            const UINT*                         initialCounts,
-            long                                stageFlags
-        );
-
         void SetSamplers(
             UINT                        startSlot,
             UINT                        count,
@@ -101,13 +87,27 @@ class D3D11StateManager
         // Executes the specified builtin compute shader.
         void DispatchBuiltin(const D3D11BuiltinShader builtinShader, UINT numWorkGroupsX, UINT numWorkGroupsY, UINT numWorkGroupsZ);
 
-        // Must be called in D3D11CommandBuffer::Begin().
-        void ResetStagingBufferPools();
+        // Resets the constant buffer pool. This should be called at the beginning of each command buffer encoding (D3D11PrimaryCommandBuffer::Begin)
+        // as well as after every constants cache has been flushed (D3D11ConstantsCache::Flush).
+        void ResetCbufferPool();
+
+        // Invokes ClearState() on the device context and invalidates all caches.
+        void ClearState();
+
+        // Invalidates all internal caches. This should only be called after ID3D11DeviceContext::ClearCache()
+        // is explicitly or implicitly called, e.g. via ExecuteCommandList().
+        void ClearCache();
 
         // Returns the ID3D11DeviceContext that this state manager is associated with.
         inline ID3D11DeviceContext* GetContext() const
         {
             return context_.Get();
+        }
+
+        // Returns the binding table.
+        inline D3D11BindingTable& GetBindingTable()
+        {
+            return bindingTable_;
         }
 
     private:
@@ -144,6 +144,7 @@ class D3D11StateManager
 
         #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1
         ComPtr<ID3D11DeviceContext1>    context1_;
+        const bool                      needsCommandListEmulation_  = false;
         #endif
 
         D3D11StagingBufferPool          stagingCbufferPool_;
@@ -151,6 +152,8 @@ class D3D11StateManager
         D3DInputAssemblyState           inputAssemblyState_;
         D3DShaderState                  shaderState_;
         D3DRenderState                  renderState_;
+
+        D3D11BindingTable               bindingTable_;
 
 };
 

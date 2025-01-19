@@ -24,10 +24,12 @@ ComPtr<ID3D12Resource> DXCreateResultResource(
 {
     ComPtr<ID3D12Resource> resource;
 
+    const CD3DX12_HEAP_PROPERTIES heapProperties{ heapType };
+    const CD3DX12_RESOURCE_DESC bufferDesc = CD3DX12_RESOURCE_DESC::Buffer(size);
     HRESULT hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(heapType),
+        &heapProperties,
         D3D12_HEAP_FLAG_NONE,
-        &CD3DX12_RESOURCE_DESC::Buffer(size),
+        &bufferDesc,
         initialState,
         nullptr,
         IID_PPV_ARGS(resource.ReleaseAndGetAddressOf())
@@ -37,17 +39,28 @@ ComPtr<ID3D12Resource> DXCreateResultResource(
     return resource;
 }
 
-D3D12QueryHeap::D3D12QueryHeap(D3D12Device& device, const QueryHeapDescriptor& desc) :
-    QueryHeap    { desc.type                           },
-    nativeType_  { D3D12Types::MapQueryType(desc.type) },
-    isPredicate_ { desc.renderCondition                }
+static UINT GetD3D12QueryDataSize(D3D12_QUERY_TYPE queryType)
 {
-    /* Determine buffer stride for each group of queries */
-    if (nativeType_ == D3D12_QUERY_TYPE_PIPELINE_STATISTICS)
-        alignedStride_ = sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
-    else
-        alignedStride_ = sizeof(UINT64);
+    switch (queryType)
+    {
+        case D3D12_QUERY_TYPE_PIPELINE_STATISTICS:
+            return sizeof(D3D12_QUERY_DATA_PIPELINE_STATISTICS);
+        case D3D12_QUERY_TYPE_SO_STATISTICS_STREAM0:
+        case D3D12_QUERY_TYPE_SO_STATISTICS_STREAM1:
+        case D3D12_QUERY_TYPE_SO_STATISTICS_STREAM2:
+        case D3D12_QUERY_TYPE_SO_STATISTICS_STREAM3:
+            return sizeof(D3D12_QUERY_DATA_SO_STATISTICS);
+        default:
+            return sizeof(UINT64);
+    }
+}
 
+D3D12QueryHeap::D3D12QueryHeap(D3D12Device& device, const QueryHeapDescriptor& desc) :
+    QueryHeap      { desc.type                           },
+    nativeType_    { D3D12Types::MapQueryType(desc.type) },
+    alignedStride_ { GetD3D12QueryDataSize(nativeType_)  },
+    isPredicate_   { desc.renderCondition                }
+{
     /* For some query types, multiple internal queries must be created */
     queryPerType_ = (desc.type == QueryType::TimeElapsed ? 2 : 1);
 
@@ -85,9 +98,12 @@ D3D12QueryHeap::D3D12QueryHeap(D3D12Device& device, const QueryHeapDescriptor& d
 
     /* Initialize dirty range with invalidation */
     InvalidateDirtyRange();
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
-void D3D12QueryHeap::SetName(const char* name)
+void D3D12QueryHeap::SetDebugName(const char* name)
 {
     D3D12SetObjectName(GetNative(), name);
     D3D12SetObjectNameSubscript(GetResultResource(), name, ".Result");
@@ -202,7 +218,8 @@ void D3D12QueryHeap::TransitionResource(
     D3D12_RESOURCE_STATES       stateBefore,
     D3D12_RESOURCE_STATES       stateAfter)
 {
-    commandList->ResourceBarrier(1, &CD3DX12_RESOURCE_BARRIER::Transition(resultResource_.Get(), stateBefore, stateAfter));
+    const CD3DX12_RESOURCE_BARRIER barrier = CD3DX12_RESOURCE_BARRIER::Transition(resultResource_.Get(), stateBefore, stateAfter);
+    commandList->ResourceBarrier(1, &barrier);
 }
 
 void D3D12QueryHeap::CopyResultsToResource(

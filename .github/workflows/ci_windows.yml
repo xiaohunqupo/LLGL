@@ -20,10 +20,11 @@ jobs:
 
     env:
       README: ${{ github.workspace }}/README.txt
+      CONFIG: ${{ matrix.config == 'Debug' && 'Debug' || 'RelWithDebInfo' }}
 
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       with:
         submodules: recursive
 
@@ -37,18 +38,19 @@ jobs:
         -DLLGL_BUILD_EXAMPLES=ON
         -DLLGL_BUILD_TESTS=ON
         -DLLGL_BUILD_WRAPPER_C99=ON
+        -DLLGL_BUILD_WRAPPER_CSHARP=ON
         -DLLGL_VK_ENABLE_SPIRV_REFLECT=ON
-        -DLLGL_GL_ENABLE_OPENGL2X=ON
-        "-DLLGL_D3D11_ENABLE_FEATURELEVEL=Direct3D 11.3"
+        "-DLLGL_D3D11_ENABLE_FEATURELEVEL=${{ matrix.generator == 'Visual Studio 17 2022' && 'Direct3D 11.3' || 'Direct3D 11.0' }}"
+        "-DLLGL_D3D12_ENABLE_FEATURELEVEL=${{ matrix.generator == 'Visual Studio 17 2022' && 'Direct3D 12.2' || 'Direct3D 12.0' }}"
 
     - name: Build
       run: |
-        cmake --build ${{ github.workspace }}/${{ matrix.arch }} --config ${{ matrix.config }}
+        cmake --build ${{ github.workspace }}/${{ matrix.arch }} --config ${{ env.CONFIG }}
         echo "LLGL built with ${{ matrix.generator }} for ${{ matrix.arch }} on $(date)." > ${{ env.README }}
         echo "Place at root of LLGL repository to run examples and testbed." >> ${{ env.README }}
 
     - name: Upload Binaries
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: matrix.generator == 'Visual Studio 17 2022' && matrix.lib == 'Shared' && matrix.config == 'Release'
       with:
         name: LLGL-Windows-${{ matrix.config }}-${{ matrix.arch == 'x64' && 'x86_64' || 'x86' }}
@@ -61,12 +63,14 @@ jobs:
     - name: Testbed
       working-directory: tests/Testbed
       run: |
-        ${{ github.workspace }}/${{ matrix.arch }}/build/${{ matrix.config }}/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }}.exe d3d12 -v -f -t -g
+        ${{ github.workspace }}/${{ matrix.arch }}/build/${{ env.CONFIG }}/${{ matrix.config == 'Debug' && 'TestbedD' || 'Testbed' }}.exe d3d12 -v -f -t -g ${{ matrix.config == 'Debug' && '-d=gpu' || '' }}
 
     - name: Upload Test Report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       if: always() && matrix.generator == 'Visual Studio 17 2022' && matrix.arch == 'x64' && matrix.lib == 'Shared' && matrix.config == 'Release'
       with:
         name: LLGL-Win64-Test_Report
         path: |
           tests/Testbed/Output/Direct3D12/*.png
+          tests/Testbed/Output/Direct3D12/Report.txt
+

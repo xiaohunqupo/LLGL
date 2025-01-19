@@ -99,8 +99,8 @@ struct DepthStencilValue
 template <typename T>
 double ReadNormalizedVariant(const T& src)
 {
-    const double min = static_cast<double>(std::numeric_limits<T>::min());
-    const double max = static_cast<double>(std::numeric_limits<T>::max());
+    constexpr double min = static_cast<double>(std::numeric_limits<T>::min());
+    constexpr double max = static_cast<double>(std::numeric_limits<T>::max());
     return (static_cast<double>(src) - min) / (max - min);
 }
 
@@ -108,8 +108,8 @@ double ReadNormalizedVariant(const T& src)
 template <typename T>
 void WriteNormalizedVariant(T& dst, double value)
 {
-    const double min = static_cast<double>(std::numeric_limits<T>::min());
-    const double max = static_cast<double>(std::numeric_limits<T>::max());
+    constexpr double min = static_cast<double>(std::numeric_limits<T>::min());
+    constexpr double max = static_cast<double>(std::numeric_limits<T>::max());
     dst = static_cast<T>(value * (max - min) + min);
 }
 
@@ -413,7 +413,7 @@ static void ReadDepthStencilValue(
     else if (srcFormat == ImageFormat::DepthStencil && dataType == DataType::UInt32)
     {
         /* Read D24UNormS8UInt format: Decompress 24-bit float and 8-bit unsigned integer */
-        value.depth   = static_cast<float>(srcBuffer.uint32[idx] & 0xFFFFFF) / static_cast<float>(0xFFFFFF);
+        value.depth   = static_cast<float>(srcBuffer.uint32[idx] & 0x00FFFFFFu) / static_cast<float>(0x00FFFFFFu);
         value.stencil = srcBuffer.uint32[idx] >> 24;
     }
     else if (srcFormat == ImageFormat::Depth && dataType == DataType::Float32)
@@ -450,8 +450,8 @@ static void WriteDepthStencilValue(
     else if (dstFormat == ImageFormat::DepthStencil && dataType == DataType::UInt32)
     {
         /* Write D24UNormS8UInt format: Decompress 24-bit float and 8-bit unsigned integer */
-        const std::uint32_t depth24 = static_cast<std::uint32_t>(value.depth * static_cast<float>(0xFFFFFF));
-        dstBuffer.uint32[idx] = ((value.stencil & 0xFF)) << 24 | (depth24 & 0xFFFFFF);
+        const std::uint32_t depth24 = static_cast<std::uint32_t>(value.depth * static_cast<float>(0x00FFFFFFu));
+        dstBuffer.uint32[idx] = ((value.stencil & 0x000000FFu)) << 24 | (depth24 & 0x00FFFFFFu);
     }
     else if (dstFormat == ImageFormat::Depth && dataType == DataType::Float32)
     {
@@ -577,6 +577,8 @@ static void ValidateImageConversionParams(
         LLGL_TRAP("cannot convert compressed image formats");
     if (IsDepthOrStencilFormat(srcImageView.format) != IsDepthOrStencilFormat(dstFormat))
         LLGL_TRAP("cannot convert between depth-stencil and non-depth-stencil image formats");
+    if (dstDataType < DataType::Int8 || dstDataType > DataType::Float64)
+        LLGL_TRAP("invalid value for destination data type: 0x%08X", static_cast<unsigned>(dstDataType));
 }
 
 
@@ -730,7 +732,26 @@ LLGL_EXPORT DynamicByteArray ConvertImageBuffer(
     return dstImage;
 }
 
+LLGL_DEPRECATED_IGNORE_PUSH()
+
 LLGL_EXPORT DynamicByteArray DecompressImageBufferToRGBA8UNorm(
+    const ImageView&    srcImageView,
+    const Extent2D&     extent,
+    unsigned            threadCount)
+{
+    switch (srcImageView.format)
+    {
+        case ImageFormat::BC1:
+            return DecompressImageBufferToRGBA8UNorm(Format::BC1UNorm, srcImageView, extent, threadCount);
+        default:
+            return nullptr;
+    }
+}
+
+LLGL_DEPRECATED_IGNORE_POP()
+
+LLGL_EXPORT DynamicByteArray DecompressImageBufferToRGBA8UNorm(
+    Format              compressedFormat,
     const ImageView&    srcImageView,
     const Extent2D&     extent,
     unsigned            threadCount)
@@ -739,10 +760,14 @@ LLGL_EXPORT DynamicByteArray DecompressImageBufferToRGBA8UNorm(
         threadCount = std::thread::hardware_concurrency();
 
     /* Check for BC compression */
-    if (srcImageView.format == ImageFormat::BC1)
-        return DecompressBC1ToRGBA8UNorm(extent, reinterpret_cast<const char*>(srcImageView.data), srcImageView.dataSize, threadCount);
-
-    return nullptr;
+    switch (compressedFormat)
+    {
+        case Format::BC1UNorm:
+        case Format::BC1UNorm_sRGB:
+            return DecompressBC1ToRGBA8UNorm(extent, reinterpret_cast<const char*>(srcImageView.data), srcImageView.dataSize, threadCount);
+        default:
+            return nullptr;
+    }
 }
 
 // Returns the 1D flattened buffer position for a 3D image coordinate ('bpp' denotes the bytes per pixel)

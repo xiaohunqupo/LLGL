@@ -60,7 +60,7 @@ class D3D11ConstantsCache
         };
 
         // Represents a single D3D constant register of four 32-bit words.
-        struct ConstantRegister
+        struct alignas(16) ConstantRegister
         {
             std::uint32_t words[4];
         };
@@ -74,7 +74,7 @@ class D3D11ConstantsCache
 
     private:
 
-        // Allocates a new constnat buffer at the specified slot and returns its zero-based index.
+        // Allocates a new constant buffer at the specified slot and returns its zero-based index.
         std::uint8_t AllocateConstantBuffer(UINT slot, UINT size, long stageFlags);
 
         // Sets the constants of the specified cbuffer with the state manager.

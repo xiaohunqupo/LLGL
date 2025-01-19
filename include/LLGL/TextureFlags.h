@@ -169,7 +169,7 @@ struct TextureSubresource
 
 /**
 \brief Texture location structure: MIP-map level and offset.
-\remarks This is used to specifiy the source and destination location of a texture copy operation.
+\remarks This is used to specify the source and destination location of a texture copy operation.
 \see CommandBuffer::CopyTexture
 \see TextureRegion
 */
@@ -266,6 +266,13 @@ struct TextureRegion
 */
 struct TextureDescriptor
 {
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*     debugName       = nullptr;
+
     //! Hardware texture type. By default TextureType::Texture2D.
     TextureType     type            = TextureType::Texture2D;
 
@@ -275,6 +282,15 @@ struct TextureDescriptor
     \see BindFlags
     */
     long            bindFlags       = (BindFlags::Sampled | BindFlags::ColorAttachment);
+
+    /**
+    \brief CPU read/write access flags. By default CPUAccessFlags::ReadWrite.
+    \remarks If this is 0 the texture cannot be mapped between GPU and CPU memory space.
+    \see CPUAccessFlags
+    \see RenderSystem::ReadTexture
+    \see RenderSystem::WriteTexture
+    */
+    long            cpuAccessFlags  = (CPUAccessFlags::Read | CPUAccessFlags::Write);
 
     /**
     \brief Miscellaneous texture flags. By default MiscFlags::FixedSamples and MiscFlags::GenerateMips.

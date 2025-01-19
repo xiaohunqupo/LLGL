@@ -23,24 +23,19 @@ class NullPipelineState final : public PipelineState
 
     public:
 
-        void SetName(const char* name) override;
+        void SetDebugName(const char* name) override;
         const Report* GetReport() const override;
 
     public:
 
         NullPipelineState(const GraphicsPipelineDescriptor& desc);
         NullPipelineState(const ComputePipelineDescriptor& desc);
-        ~NullPipelineState();
 
     public:
 
-        const bool isGraphicsPSO;
-
-        union
-        {
-            const GraphicsPipelineDescriptor    graphicsDesc;
-            const ComputePipelineDescriptor     computeDesc;
-        };
+        const bool                          isGraphicsPSO;
+        const GraphicsPipelineDescriptor    graphicsDesc;
+        const ComputePipelineDescriptor     computeDesc;
 
     private:
 

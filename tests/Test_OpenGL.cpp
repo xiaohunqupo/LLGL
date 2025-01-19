@@ -10,62 +10,92 @@
 #include <LLGL/Utils/VertexFormat.h>
 #include <Gauss/Gauss.h>
 #include <memory>
-#include <iostream>
 #include <string>
-#include <sstream>
 
 
-//#define TEST_RENDER_TARGET
-//#define TEST_QUERY
-//#define TEST_STORAGE_BUFFER
+#define TEST_RENDER_TARGET      0
+#define TEST_QUERY              0
+#define TEST_STORAGE_BUFFER     0
+#define TEST_CUSTOM_GLCONTEXT   0
+
+
+#if _WIN32 && TEST_CUSTOM_GLCONTEXT
+#include <LLGL/Platform/NativeHandle.h>
+#include <LLGL/Backend/OpenGL/NativeHandle.h>
+#pragma comment(lib, "opengl32")
+#endif
 
 
 int main()
 {
     try
     {
+        LLGL::Log::RegisterCallbackStd();
+
         // Setup profiler and debugger
         std::shared_ptr<LLGL::RenderingDebugger> debugger;
 
         debugger = std::make_shared<LLGL::RenderingDebugger>();
 
+        const LLGL::Extent2D resolution{ 800, 600 };
+        const bool fullscreen = false;
+
+        LLGL::WindowDescriptor windowDesc;
+        {
+            windowDesc.size     = resolution;
+            windowDesc.flags    = LLGL::WindowFlags::Resizable | (fullscreen ? LLGL::WindowFlags::Borderless : LLGL::WindowFlags::Centered);
+        }
+        auto window = std::shared_ptr<LLGL::Window>(LLGL::Window::Create(windowDesc));
+
+        #if _WIN32 && TEST_CUSTOM_GLCONTEXT
+
+        LLGL::NativeHandle nativeWndHandle = {};
+        window->GetNativeHandle(&nativeWndHandle, sizeof(nativeWndHandle));
+
+        HDC dc = ::GetDC(nativeWndHandle.window);
+
+        PIXELFORMATDESCRIPTOR pfd = {};
+        pfd.nSize           = sizeof(PIXELFORMATDESCRIPTOR);
+        pfd.nVersion        = 1;
+        pfd.dwFlags         = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER | PFD_SWAP_EXCHANGE;
+        pfd.iPixelType      = PFD_TYPE_RGBA;
+        pfd.cColorBits      = 24;
+        pfd.cAlphaBits      = 8;
+        pfd.cDepthBits      = 24;
+        pfd.cStencilBits    = 8;
+        ::SetPixelFormat(dc, ::ChoosePixelFormat(dc, &pfd), &pfd);
+
+        HGLRC glc = ::wglCreateContext(dc);
+
+        LLGL::OpenGL::RenderSystemNativeHandle nativeRendererHandle = {};
+        nativeRendererHandle.context = glc;
+
+        #endif
+
         // Load render system module
         LLGL::RenderSystemDescriptor rendererDesc = "OpenGL";
         {
-            rendererDesc.debugger = debugger.get();
+            rendererDesc.debugger           = debugger.get();
+            #if _WIN32 && TEST_CUSTOM_GLCONTEXT
+            rendererDesc.nativeHandle       = &nativeRendererHandle;
+            rendererDesc.nativeHandleSize   = sizeof(nativeRendererHandle);
+            #endif
         }
         auto renderer = LLGL::RenderSystem::Load(rendererDesc);
 
         // Create swap-chain
         LLGL::SwapChainDescriptor swapChainDesc;
 
-        swapChainDesc.resolution    = { 800, 600 };
+        swapChainDesc.resolution    = resolution;
         swapChainDesc.samples       = 8;
-        //swapChainDesc.fullscreen    = true;
+        swapChainDesc.fullscreen    = fullscreen;
 
         LLGL::RendererConfigurationOpenGL rendererConfig;
         rendererConfig.contextProfile   = LLGL::OpenGLContextProfile::CoreProfile;
         rendererConfig.majorVersion     = 3;
         rendererConfig.minorVersion     = 0;
 
-        #ifdef __linux__
-
-        auto swapChain = renderer->CreateSwapChain(swapChainDesc);
-
-        auto window = static_cast<LLGL::Window*>(&(swapChain->GetSurface()));
-
-        #else
-
-        LLGL::WindowDescriptor windowDesc;
-        {
-            windowDesc.size     = swapChainDesc.resolution;
-            windowDesc.flags    = LLGL::WindowFlags::Resizable | (swapChainDesc.fullscreen ? LLGL::WindowFlags::Borderless : LLGL::WindowFlags::Centered);
-        }
-        auto window = std::shared_ptr<LLGL::Window>(LLGL::Window::Create(windowDesc));
-
         auto swapChain = renderer->CreateSwapChain(swapChainDesc, window);
-
-        #endif
 
         window->Show();
 
@@ -76,7 +106,7 @@ int main()
         //const auto& renderCaps = renderer->GetRenderingCaps();
 
         // Setup window title
-        window->SetTitle("LLGL Test 2 ( " + std::string(renderer->GetName()) + " )");
+        window->SetTitle("LLGL OpenGL Test ( " + std::string(renderer->GetName()) + " )");
 
         // Setup input controller
         LLGL::Input input{ *window };
@@ -101,15 +131,15 @@ int main()
 
         // Create vertex buffer
         LLGL::VertexFormat vertexFormat;
-        vertexFormat.AppendAttribute({ "texCoord", LLGL::Format::RG32Float });
+        //vertexFormat.AppendAttribute({ "texCoord", LLGL::Format::RG32Float });
         vertexFormat.AppendAttribute({ "position", LLGL::Format::RG32Float });
 
         const Gs::Vector2f vertices[] =
         {
-            { 0, 0 }, { 110, 100 },
-            { 0, 0 }, { 100, 200 },
-            { 0, 0 }, { 200, 100 },
-            { 0, 0 }, { 200, 200 },
+            { 110, 100 },
+            { 100, 200 },
+            { 200, 100 },
+            { 200, 200 },
         };
 
         LLGL::BufferDescriptor vertexBufferDesc;
@@ -126,13 +156,13 @@ int main()
         // Create vertex shader
         auto vertShaderSource =
         (
-            #ifdef TEST_STORAGE_BUFFER
+            #if TEST_STORAGE_BUFFER
             "#version 430\n"
             #else
-            "#version 130\n"
+            "#version 330\n"
             #endif
             "uniform mat4 projection;\n"
-            #ifdef TEST_STORAGE_BUFFER
+            #if TEST_STORAGE_BUFFER
             "layout(std430) buffer outputBuffer {\n"
             "    float v[4];\n"
             "} outputData;\n"
@@ -142,7 +172,7 @@ int main()
             "void main() {\n"
             "    gl_Position = projection * vec4(position, 0.0, 1.0);\n"
             "    vertexPos = (position - vec2(125, 125))*vec2(0.02);\n"
-            #ifdef TEST_STORAGE_BUFFER
+            #if TEST_STORAGE_BUFFER
             "    outputData.v[gl_VertexID] = vertexPos.x;\n"
             #endif
             "}\n"
@@ -158,12 +188,12 @@ int main()
         auto vertShader = renderer->CreateShader(vertShaderDesc);
 
         if (auto report = vertShader->GetReport())
-            std::cerr << report->GetText() << std::endl;
+            LLGL::Log::Errorf("%s\n", report->GetText());
 
         // Create fragment shader
         auto fragShaderSource =
         (
-            "#version 130\n"
+            "#version 330\n"
             "out vec4 fragColor;\n"
             "uniform sampler2D tex;\n"
             "uniform vec4 color;\n"
@@ -184,12 +214,12 @@ int main()
         #if 0//TODO
         // Reflect shader
         LLGL::ShaderReflection reflection;
-        vertShader.Reflect(reflection);
-        fragShader.Reflect(reflection);
+        vertShader->Reflect(reflection);
+        fragShader->Reflect(reflection);
 
         for (const auto& uniform : reflection.uniforms)
         {
-            std::cout << "uniform: name = \"" << uniform.name << "\", location = " << uniform.location << ", size = " << uniform.size << std::endl;
+            LLGL::Log::Printf("uniform: name = \"%s\", size = %u\n", uniform.name, uniform.arraySize);
         }
         #endif
 
@@ -237,7 +267,7 @@ int main()
         LLGL::RenderTarget* renderTarget = nullptr;
         LLGL::Texture* renderTargetTex = nullptr;
 
-        #ifdef TEST_RENDER_TARGET
+        #if TEST_RENDER_TARGET
 
         renderTarget = renderer->CreateRenderTarget(8);
 
@@ -260,7 +290,13 @@ int main()
         #endif
 
         // Create pipeline layout
-        auto pipelineLayout = renderer->CreatePipelineLayout(LLGL::Parse("texture(0):frag, sampler(0):frag"));
+        auto pipelineLayout = renderer->CreatePipelineLayout(
+            LLGL::Parse(
+                "texture(0):frag,"
+                "sampler(0):frag,"
+                "float4(projection,color),"
+           )
+        );
 
         // Create graphics pipeline
         LLGL::GraphicsPipelineDescriptor pipelineDesc;
@@ -272,7 +308,7 @@ int main()
 
             pipelineDesc.rasterizer.multiSampleEnabled  = (swapChainDesc.samples > 1);
 
-            pipelineDesc.blend.targets[0].dstColor      = LLGL::BlendOp::Zero;
+            //pipelineDesc.blend.targets[0].dstColor      = LLGL::BlendOp::Zero;
         }
         auto& pipeline = *renderer->CreatePipelineState(pipelineDesc);
 
@@ -299,12 +335,12 @@ int main()
         }
         auto& sampler = *renderer->CreateSampler(samplerDesc);
 
-        #ifdef TEST_QUERY
+        #if TEST_QUERY
         auto query = renderer->CreateQueryHeap(LLGL::QueryType::SamplesPassed);
         bool hasQueryResult = false;
         #endif
 
-        #ifdef TEST_STORAGE_BUFFER
+        #if TEST_STORAGE_BUFFER
 
         LLGL::StorageBuffer* storage = nullptr;
 
@@ -317,7 +353,7 @@ int main()
 
             auto storeBufferDescs = shaderProgram.QueryStorageBuffers();
             for (const auto& desc : storeBufferDescs)
-                std::cout << "storage buffer: name = \"" << desc.name << '\"' << std::endl;
+                LLGL::Log::Printf("storage buffer: name = \"%s\"\n", desc.name.c_str());
         }
 
         #endif
@@ -342,7 +378,7 @@ int main()
                     commands->SetResource(1, sampler);
                     //#endif
 
-                    #if 0//TODO
+                    #if 1//TODO
                     auto projection = Gs::ProjectionMatrix4f::Planar(
                         static_cast<Gs::Real>(swapChain->GetResolution().width),
                         static_cast<Gs::Real>(swapChain->GetResolution().height)
@@ -378,17 +414,17 @@ int main()
 
                     #endif
 
-                    #ifdef TEST_QUERY
+                    #if TEST_QUERY
 
                     if (!hasQueryResult)
                         commands->BeginQuery(*query);
 
                     #endif
 
-                    commands->SetResource(1, texture);
+                    commands->SetResource(0, texture);
                     commands->Draw(4, 0);
 
-                    #ifdef TEST_STORAGE_BUFFER
+                    #if TEST_STORAGE_BUFFER
 
                     if (renderCaps.hasStorageBuffers)
                     {
@@ -399,7 +435,7 @@ int main()
                             auto outputData = renderer->MapBuffer(*storage, LLGL::BufferCPUAccess::ReadOnly);
                             {
                                 auto v = reinterpret_cast<Gs::Vector4f*>(outputData);
-                                std::cout << "storage buffer output: " << *v << std::endl;
+                                LLGL::Log::Printf("storage buffer output: ( %f | %f | %f | %f )\n", v[0].x, v[0].y, v[0].z, v[0].w);
                             }
                             renderer->UnmapBuffer();
                         }
@@ -407,7 +443,7 @@ int main()
 
                     #endif
 
-                    #ifdef TEST_QUERY
+                    #if TEST_QUERY
 
                     if (!hasQueryResult)
                     {
@@ -422,7 +458,7 @@ int main()
                         if (prevResult != result)
                         {
                             prevResult = result;
-                            std::cout << "query result = " << result << std::endl;
+                            LLGL::Log::Printf("query result = %u", static_cast<unsigned>(result));
                         }
                         hasQueryResult = false;
                     }
@@ -447,7 +483,7 @@ int main()
     }
     catch (const std::exception& e)
     {
-        std::cerr << e.what() << std::endl;
+        LLGL::Log::Errorf("%s\n", e.what());
         #ifdef _WIN32
         system("pause");
         #endif

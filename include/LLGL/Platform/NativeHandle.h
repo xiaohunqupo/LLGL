@@ -13,10 +13,14 @@
 
 #if defined(LLGL_OS_WIN32)
 #   include <LLGL/Platform/Win32/Win32NativeHandle.h>
+#elif defined(LLGL_OS_UWP)
+#   include <LLGL/Platform/UWP/UWPNativeHandle.h>
 #elif defined(LLGL_OS_MACOS)
 #   include <LLGL/Platform/MacOS/MacOSNativeHandle.h>
 #elif defined(LLGL_OS_LINUX)
 #   include <LLGL/Platform/Linux/LinuxNativeHandle.h>
+#elif defined(LLGL_OS_WASM)
+#   include <LLGL/Platform/Wasm/WasmNativeHandle.h>
 #elif defined(LLGL_OS_IOS)
 #   include <LLGL/Platform/IOS/IOSNativeHandle.h>
 #elif defined(LLGL_OS_ANDROID)

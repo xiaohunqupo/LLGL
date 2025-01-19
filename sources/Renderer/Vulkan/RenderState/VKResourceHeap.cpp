@@ -38,23 +38,23 @@ VKResourceHeap::VKResourceHeap(
     descriptorPool_ { device, vkDestroyDescriptorPool }
 {
     /* Get pipeline layout object */
-    auto pipelineLayoutVK = LLGL_CAST(VKPipelineLayout*, desc.pipelineLayout);
+    auto* pipelineLayoutVK = LLGL_CAST(VKPipelineLayout*, desc.pipelineLayout);
     if (!pipelineLayoutVK)
         LLGL_TRAP("failed to create resource view heap due to missing pipeline layout");
 
     /* Get and validate number of bindings and resource views */
-    CopyLayoutBindings(pipelineLayoutVK->GetLayoutHeapBindings());
+    ConvertLayoutBindings(pipelineLayoutVK->GetLayoutHeapBindings());
 
-    const auto numBindings      = static_cast<std::uint32_t>(bindings_.size());
-    const auto numResourceViews = GetNumResourceViewsOrThrow(numBindings, desc, initialResourceViews);
+    const std::uint32_t numBindings         = static_cast<std::uint32_t>(bindings_.size());
+    const std::uint32_t numResourceViews    = GetNumResourceViewsOrThrow(numBindings, desc, initialResourceViews);
 
     /* Create descriptor pool and array of descriptor sets */
-    const auto numDescriptorSets = (numResourceViews / numBindings);
+    const std::uint32_t numDescriptorSets = (numResourceViews / numBindings);
     CreateDescriptorPool(device, numDescriptorSets);
     CreateDescriptorSets(device, numDescriptorSets, pipelineLayoutVK->GetSetLayoutForHeapBindings());
 
     /* Allocate array for descriptor set barriers */
-    if ((desc.barrierFlags & BarrierFlags::Storage) != 0)
+    if ((pipelineLayoutVK->GetBarrierFlags() & BarrierFlags::Storage) != 0)
         barriers_.resize(numDescriptorSets);
 
     /* Write initial resource views */
@@ -76,9 +76,9 @@ std::uint32_t VKResourceHeap::WriteResourceViews(
         return 0;
 
     /* Allocate local storage for buffer and image descriptors */
-    const auto numSets          = GetNumDescriptorSets();
-    const auto numBindings      = static_cast<std::uint32_t>(bindings_.size());
-    const auto numDescriptors   = numSets * numBindings;
+    const std::uint32_t numSets         = GetNumDescriptorSets();
+    const std::uint32_t numBindings     = static_cast<std::uint32_t>(bindings_.size());
+    const std::uint32_t numDescriptors  = numSets * numBindings;
 
     /* Silently quit on out of bounds; debug layer must report these errors */
     if (firstDescriptor >= numDescriptors)
@@ -86,20 +86,20 @@ std::uint32_t VKResourceHeap::WriteResourceViews(
     if (firstDescriptor + resourceViews.size() > numDescriptors)
         return 0;
 
-    const auto numResourceViewWrites = static_cast<std::uint32_t>(resourceViews.size());
+    const std::uint32_t numResourceViewWrites = static_cast<std::uint32_t>(resourceViews.size());
     VKDescriptorSetWriter setWriter{ numResourceViewWrites, numResourceViewWrites };
     VKDescriptorBarrierWriter barrierWriter;
 
-    for (const auto& desc : resourceViews)
+    for (const ResourceViewDescriptor& desc : resourceViews)
     {
         /* Skip over empty resource descriptors */
         if (desc.resource == nullptr)
             continue;
 
         /* Get resource view information */
-        const auto& binding = bindings_[firstDescriptor % numBindings];
+        const VKDescriptorBinding& binding = bindings_[firstDescriptor % numBindings];
 
-        auto descriptorSet = firstDescriptor / numBindings;
+        const std::uint32_t descriptorSet = firstDescriptor / numBindings;
 
         switch (binding.descriptorType)
         {
@@ -124,7 +124,7 @@ std::uint32_t VKResourceHeap::WriteResourceViews(
                 break;
 
             default:
-                LLGL_TRAP("invalid descriptor type in Vulkan descriptor set: %s", IntToHex(static_cast<std::uint32_t>(binding.descriptorType)));
+                LLGL_TRAP("invalid descriptor type in Vulkan descriptor set: 0x%08X", static_cast<unsigned>(binding.descriptorType));
                 break;
         }
 
@@ -141,9 +141,9 @@ std::uint32_t VKResourceHeap::WriteResourceViews(
     /* Update pipeline barriers */
     for_subrange(i, barrierWriter.barrierChangeRanges[0], barrierWriter.barrierChangeRanges[1])
     {
-        if (auto* buffer = barriers_[i].get())
+        if (VKPipelineBarrier* barrier = barriers_[i].get())
         {
-            if (!buffer->Update())
+            if (!barrier->Update())
                 barriers_[i].reset();
         }
     }
@@ -155,7 +155,7 @@ void VKResourceHeap::SubmitPipelineBarrier(VkCommandBuffer commandBuffer, std::u
 {
     if (descriptorSet < barriers_.size())
     {
-        if (auto barrier = barriers_[descriptorSet].get())
+        if (VKPipelineBarrier* barrier = barriers_[descriptorSet].get())
         {
             if (barrier->IsActive())
                 barrier->Submit(commandBuffer);
@@ -210,16 +210,17 @@ static bool IsDescriptorTypeBufferView(VkDescriptorType type)
     );
 }
 
-void VKResourceHeap::CopyLayoutBindings(const ArrayView<VKLayoutBinding>& layoutBindings)
+void VKResourceHeap::ConvertLayoutBindings(const ArrayView<VKLayoutBinding>& layoutBindings)
 {
     bindings_.resize(layoutBindings.size());
     for_range(i, layoutBindings.size())
-        CopyLayoutBinding(bindings_[i], layoutBindings[i]);
+        ConvertLayoutBinding(bindings_[i], layoutBindings[i]);
 }
 
-void VKResourceHeap::CopyLayoutBinding(VKDescriptorBinding& dst, const VKLayoutBinding& src)
+void VKResourceHeap::ConvertLayoutBinding(VKDescriptorBinding& dst, const VKLayoutBinding& src)
 {
     dst.dstBinding      = src.dstBinding;
+    dst.dstArrayElement = src.dstArrayElement;
     dst.descriptorType  = src.descriptorType;
     dst.stageFlags      = ToVkStageFlags(src.stageFlags);
     dst.imageViewIndex  = (IsDescriptorTypeImageView(src.descriptorType) ? numImageViewsPerSet_++ : VKResourceHeap::invalidViewIndex);
@@ -230,7 +231,7 @@ void VKResourceHeap::CreateDescriptorPool(VkDevice device, std::uint32_t numDesc
 {
     /* Accumulate descriptor pool sizes */
     VKPoolSizeAccumulator poolSizeAccum;
-    for (const auto& binding : bindings_)
+    for (const VKDescriptorBinding& binding : bindings_)
         poolSizeAccum.Accumulate(binding.descriptorType, numDescriptorSets);
     poolSizeAccum.Finalize();
 
@@ -244,7 +245,7 @@ void VKResourceHeap::CreateDescriptorPool(VkDevice device, std::uint32_t numDesc
         poolCreateInfo.poolSizeCount    = poolSizeAccum.Size();
         poolCreateInfo.pPoolSizes       = poolSizeAccum.Data();
     }
-    auto result = vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, descriptorPool_.ReleaseAndGetAddressOf());
+    VkResult result = vkCreateDescriptorPool(device, &poolCreateInfo, nullptr, descriptorPool_.ReleaseAndGetAddressOf());
     VKThrowIfFailed(result, "failed to create Vulkan descriptor pool");
 }
 
@@ -269,7 +270,7 @@ void VKResourceHeap::CreateDescriptorSets(
         allocInfo.descriptorSetCount    = numDescriptorSets;
         allocInfo.pSetLayouts           = setLayouts.data();
     }
-    auto result = vkAllocateDescriptorSets(device, &allocInfo, descriptorSets_.data());
+    VkResult result = vkAllocateDescriptorSets(device, &allocInfo, descriptorSets_.data());
     VKThrowIfFailed(result, "failed to allocate Vulkan descriptor sets");
 }
 
@@ -279,10 +280,10 @@ void VKResourceHeap::FillWriteDescriptorWithSampler(
     const VKDescriptorBinding&      binding,
     VKDescriptorSetWriter&          setWriter)
 {
-    auto samplerVK = LLGL_CAST(VKSampler*, desc.resource);
+    auto* samplerVK = LLGL_CAST(VKSampler*, desc.resource);
 
     /* Initialize image information */
-    auto imageInfo = setWriter.NextImageInfo();
+    VkDescriptorImageInfo* imageInfo = setWriter.NextImageInfo();
     {
         imageInfo->sampler          = samplerVK->GetVkSampler();
         imageInfo->imageView        = VK_NULL_HANDLE;
@@ -290,11 +291,11 @@ void VKResourceHeap::FillWriteDescriptorWithSampler(
     }
 
     /* Initialize write descriptor */
-    auto writeDesc = setWriter.NextWriteDescriptor();
+    VkWriteDescriptorSet* writeDesc = setWriter.NextWriteDescriptor();
     {
         writeDesc->dstSet           = descriptorSets_[descriptorSet];
         writeDesc->dstBinding       = binding.dstBinding;
-        writeDesc->dstArrayElement  = 0;
+        writeDesc->dstArrayElement  = binding.dstArrayElement;
         writeDesc->descriptorCount  = 1;
         writeDesc->descriptorType   = binding.descriptorType;
         writeDesc->pImageInfo       = imageInfo;
@@ -310,23 +311,23 @@ void VKResourceHeap::FillWriteDescriptorWithImageView(
     const VKDescriptorBinding&      binding,
     VKDescriptorSetWriter&          setWriter)
 {
-    auto textureVK = LLGL_CAST(VKTexture*, desc.resource);
+    auto* textureVK = LLGL_CAST(VKTexture*, desc.resource);
 
     /* Initialize image information */
     const std::size_t imageViewIndex = descriptorSet * numImageViewsPerSet_ + binding.imageViewIndex;
-    auto imageInfo = setWriter.NextImageInfo();
+    VkDescriptorImageInfo* imageInfo = setWriter.NextImageInfo();
     {
         imageInfo->sampler       = VK_NULL_HANDLE;
         imageInfo->imageView     = GetOrCreateImageView(device, *textureVK, desc, imageViewIndex);
-        imageInfo->imageLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+        imageInfo->imageLayout   = VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL; //TODO: VK_IMAGE_LAYOUT_GENERAL for storage image
     }
 
     /* Initialize write descriptor */
-    auto writeDesc = setWriter.NextWriteDescriptor();
+    VkWriteDescriptorSet* writeDesc = setWriter.NextWriteDescriptor();
     {
         writeDesc->dstSet           = descriptorSets_[descriptorSet];
         writeDesc->dstBinding       = binding.dstBinding;
-        writeDesc->dstArrayElement  = 0;
+        writeDesc->dstArrayElement  = binding.dstArrayElement;
         writeDesc->descriptorCount  = 1;
         writeDesc->descriptorType   = binding.descriptorType;
         writeDesc->pImageInfo       = imageInfo;
@@ -343,10 +344,10 @@ void VKResourceHeap::FillWriteDescriptorWithBufferRange(
     VKDescriptorSetWriter&          setWriter,
     VKDescriptorBarrierWriter&      barrierWriter)
 {
-    auto bufferVK = LLGL_CAST(VKBuffer*, desc.resource);
+    auto* bufferVK = LLGL_CAST(VKBuffer*, desc.resource);
 
     /* Initialize buffer information */
-    auto bufferInfo = setWriter.NextBufferInfo();
+    VkDescriptorBufferInfo* bufferInfo = setWriter.NextBufferInfo();
     {
         bufferInfo->buffer = bufferVK->GetVkBuffer();
         if (desc.bufferView.size == LLGL_WHOLE_SIZE)
@@ -362,11 +363,11 @@ void VKResourceHeap::FillWriteDescriptorWithBufferRange(
     }
 
     /* Initialize write descriptor */
-    auto writeDesc = setWriter.NextWriteDescriptor();
+    VkWriteDescriptorSet* writeDesc = setWriter.NextWriteDescriptor();
     {
         writeDesc->dstSet           = descriptorSets_[descriptorSet];
         writeDesc->dstBinding       = binding.dstBinding;
-        writeDesc->dstArrayElement  = 0;
+        writeDesc->dstArrayElement  = binding.dstArrayElement;
         writeDesc->descriptorCount  = 1;
         writeDesc->descriptorType   = binding.descriptorType;
         writeDesc->pImageInfo       = nullptr;
@@ -396,7 +397,7 @@ bool VKResourceHeap::ExchangeBufferBarrier(std::uint32_t descriptorSet, Buffer* 
 
 bool VKResourceHeap::EmplaceBarrier(std::uint32_t descriptorSet, std::uint32_t slot, Resource* resource, VkPipelineStageFlags stageFlags)
 {
-    if (auto barrier = barriers_[descriptorSet].get())
+    if (VKPipelineBarrier* barrier = barriers_[descriptorSet].get())
     {
         /* Emplace into existing pipeline barrier */
         return barrier->Emplace(slot, resource, stageFlags);
@@ -404,7 +405,7 @@ bool VKResourceHeap::EmplaceBarrier(std::uint32_t descriptorSet, std::uint32_t s
     else
     {
         /* Allocate new pipeline barrier for descriptor set */
-        auto newBarrier = MakeUnique<VKPipelineBarrier>();
+        VKPipelineBarrierPtr newBarrier = MakeUnique<VKPipelineBarrier>();
         newBarrier->Emplace(slot, resource, stageFlags);
         barriers_[descriptorSet] = std::move(newBarrier);
         return true;
@@ -413,7 +414,7 @@ bool VKResourceHeap::EmplaceBarrier(std::uint32_t descriptorSet, std::uint32_t s
 
 bool VKResourceHeap::RemoveBarrier(std::uint32_t descriptorSet, std::uint32_t slot)
 {
-    if (auto barrier = barriers_[descriptorSet].get())
+    if (VKPipelineBarrier* barrier = barriers_[descriptorSet].get())
         return barrier->Remove(slot);
     else
         return false;

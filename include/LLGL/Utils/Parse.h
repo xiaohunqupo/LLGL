@@ -12,6 +12,7 @@
 #include <LLGL/Export.h>
 #include <LLGL/Container/SmallVector.h>
 #include <LLGL/Container/StringView.h>
+#include <LLGL/Container/UTF8String.h>
 #include <LLGL/PipelineLayoutFlags.h>
 #include <LLGL/TextureFlags.h>
 #include <LLGL/SamplerFlags.h>
@@ -59,7 +60,17 @@ class LLGL_EXPORT ParseContext
         ParseContext(ParseContext&&) = default;
         ParseContext& operator = (ParseContext&&) = default;
 
+        /**
+        \brief Constructs the context with a string view.
+        \remarks This will only keep a weak reference to the source string and that string must be kept alive for the lifetime of this context.
+        */
         explicit ParseContext(const StringView& source);
+
+        /**
+        \brief Constructs the context with a UTF-8 string.
+        \remarks This will take the ownership of the source string.
+        */
+        explicit ParseContext(UTF8String&& source);
 
     public:
 
@@ -87,12 +98,18 @@ class LLGL_EXPORT ParseContext
             - \c frag for the fragment shader stage (i.e. StageFlags::FragmentStage).
             - \c comp for the compute shader stage (i.e. StageFlags::ComputeStage).
         - If no stage flag is specified, all shader stages will be used.
-        - There is a secondary syntax for uniform descriptors (see LLGL::UniformType for accepted type names):
+        - The following syntax can be used for uniform descriptors (see LLGL::UniformType for accepted type names):
             \code
             arraySize   := '[' INT ']'
             uniform     := NAME | NAME arraySize
             uniformList := uniform | uniform ',' uniformList
             uniformDesc := TYPE '(' uniformList ')'
+            \endcode
+        - The following syntax can be used for barrier flags (see PipelineLayoutDescriptor::barrierFlags):
+            \code
+            barriers := 'barriers' '{' flags '}'
+            flags    := FLAG | FLAG ',' | FLAG ',' flags
+            FLAG     := 'rw' | 'rwbuffer' | 'rwtexture'
             \endcode
         - Whitespaces are ignored (e.g. blanks <code>' '</code>, tabulators <code>'\\t'</code>, new-line characters <code>'\\n'</code> and <code>'\\r'</code> etc.), see C++ STL function <code>std::isspace</code>.
         \remarks Here is a usage example:
@@ -106,10 +123,13 @@ class LLGL_EXPORT ParseContext
             LLGL::BindingDescriptor{ "TexArray", LLGL::ResourceType::Texture, LLGL::BindFlags::Sampled,        LLGL::StageFlags::FragmentStage,                                 2u, 4u, },
         };
         myLayoutDescStd.bindings = {
-            LLGL::BindingDescriptor{             LLGL::ResourceType::Sampler, 0,                               LLGL::StageFlags::FragmentStage,                                 3u      },
+            LLGL::BindingDescriptor{ "smpl"      LLGL::ResourceType::Sampler, 0,                               LLGL::StageFlags::FragmentStage,                                 3u      },
         };
         myLayoutDescStd.uniforms = {
             LLGL::UniformDescriptor{ "WorldMatrix", LLGL::UniformType::Float4x4 }
+        };
+        myLayoutDescStd.combinedTextureSamplers = {
+            LLGL::CombinedTextureSamplerDescriptor{ "TexArray_smpl", "TexArray", "smpl" }
         };
 
         auto myLayout = myRenderer->CreatePipelineLayout(myLayoutDescStd);
@@ -117,10 +137,13 @@ class LLGL_EXPORT ParseContext
         The same pipeline layout can be created with the following usage of this utility function:
         \code
         // Abbreviated way of declaring a pipeline layout using the utility function:
-        LLGL::PipelineLayoutDescriptor myLayoutDescUtil = LLGL::Parse("heap{ cbuffer(Scene@0):frag:vert },"
-                                                                      "heap{ texture(1, TexArray@2[4]):frag },"
-                                                                      "sampler(3):frag,"
-                                                                      "float4x4(WorldMatrix),");
+        LLGL::PipelineLayoutDescriptor myLayoutDescUtil = LLGL::Parse(
+            "heap{ cbuffer(Scene@0):frag:vert },"       // Constant buffer "Scene"
+            "heap{ texture(1, TexArray@2[4]):frag },"   // Texture "TexArray"
+            "sampler(smpl@3):frag,"                     // Sampler "smpl"
+            "float4x4(WorldMatrix),"                    // Uniform "WorldMatrix"
+            "sampler<TexArray,smpl>(TexArray_smpl),"    // Combined texture-sampler "TexArray_smpl"
+        );
         auto myLayout = myRenderer->CreatePipelineLayout(myLayoutDescUtil);
         \endcode
         */
@@ -148,10 +171,10 @@ class LLGL_EXPORT ParseContext
             - \c anisotropy maps to SamplerDescriptor::maxAnisotropy and the value must be an integral number.
             - \c compare maps to SamplerDescriptor::compareOp (also enables SamplerDescriptor::compareEnabled) and the accepted values are:
                 - \c never (CompareOp::NeverPass).
-                - \c ls (CompareOp::Less).
+                - \c lt (CompareOp::Less). \c ls is also accepted but \e deprecated.
                 - \c eq (CompareOp::Equal).
                 - \c le (CompareOp::LessEqual).
-                - \c gr (CompareOp::Greater).
+                - \c gt (CompareOp::Greater). \c gr is also accepted but \e deprecated.
                 - \c ne (CompareOp::NotEqual).
                 - \c ge (CompareOp::GreaterEqual).
                 - \c always (CompareOp::AlwaysPass).
@@ -299,6 +322,7 @@ class LLGL_EXPORT ParseContext
 
     private:
 
+        UTF8String      data_;
         StringType      source_;
         TokenArrayType  tokens_;
 
@@ -306,10 +330,21 @@ class LLGL_EXPORT ParseContext
 
 /**
 \brief Returns a parse context for the input source code.
+\paramp[in] format Specifies the input string. This is treated just like a \c ::printf input string
+and each token preceeded with a \c '%' character will be substituted with the next variadic argument.
+If no \c '%' character is found in the input string, this parameter is simply forwarded to the ParseContext class.
 \remarks This is only a convenience function for the ParseContext constructor.
 \see ParseContext
 */
-inline ParseContext Parse(const StringView& s)
+LLGL_EXPORT ParseContext Parse(const char* format, ...);
+
+/**
+\brief Returns a parse context for the input source code.
+\paramp[in] s Specifies the input string as string view. This parameter is simply forwarded to the ParseContext class.
+\remarks This is only a convenience function for the ParseContext constructor.
+\see ParseContext
+*/
+inline LLGL_EXPORT ParseContext Parse(const StringView& s)
 {
     return ParseContext{ s };
 }

@@ -48,6 +48,12 @@ class DbgRenderSystem final : public RenderSystem
 
         void FlushProfile();
 
+        bool IsVulkan() const;
+
+    private:
+
+        #include <LLGL/Backend/RenderSystem.Internal.inl>
+
     private:
 
         void ValidateBindFlags(long flags);
@@ -85,6 +91,10 @@ class DbgRenderSystem final : public RenderSystem
 
         void ValidateAttachmentDesc(const AttachmentDescriptor& attachmentDesc, std::uint32_t colorTarget, bool isResolveAttachment, bool isDepthStencilAttachment);
 
+        void ValidateShaderDesc(const ShaderDescriptor& shaderDesc);
+
+        void ValidatePipelineLayoutDesc(const PipelineLayoutDescriptor& pipelineLayoutDesc);
+
         void ValidateResourceHeapDesc(const ResourceHeapDescriptor& resourceHeapDesc, const ArrayView<ResourceViewDescriptor>& initialResourceViews);
         void ValidateResourceHeapRange(const DbgResourceHeap& resourceHeapDbg, std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews);
         void ValidateResourceViewForBinding(const ResourceViewDescriptor& rvDesc, const BindingDescriptor& bindingDesc);
@@ -93,12 +103,13 @@ class DbgRenderSystem final : public RenderSystem
 
         void ValidateInputAssemblyDescriptor(const GraphicsPipelineDescriptor& pipelineStateDesc);
         void ValidateBlendTargetDescriptor(const BlendTargetDescriptor& blendTargetDesc, std::size_t idx);
-        void ValidateBlendDescriptor(const BlendDescriptor& blendDesc, bool hasFragmentShader);
+        void ValidateBlendDescriptor(const BlendDescriptor& blendDesc, bool hasFragmentShader, bool hasDualSourceBlend);
         void ValidateGraphicsPipelineDesc(const GraphicsPipelineDescriptor& pipelineStateDesc);
         void ValidateComputePipelineDesc(const ComputePipelineDescriptor& pipelineStateDesc);
-        void ValidateFragmentShaderOutput(DbgShader& fragmentShaderDbg, const RenderPass* renderPass);
-        void ValidateFragmentShaderOutputWithRenderPass(DbgShader& fragmentShaderDbg, const FragmentShaderAttributes& fragmentAttribs, const DbgRenderPass& renderPass);
+        void ValidateFragmentShaderOutput(DbgShader& fragmentShaderDbg, const RenderPass* renderPass, bool hasDualSourceBlend);
+        void ValidateFragmentShaderOutputWithRenderPass(DbgShader& fragmentShaderDbg, const FragmentShaderAttributes& fragmentAttribs, const DbgRenderPass& renderPass, bool hasDualSourceBlend);
         void ValidateFragmentShaderOutputWithoutRenderPass(DbgShader& fragmentShaderDbg, const FragmentShaderAttributes& fragmentAttribs);
+        void ValidatePipelineStateUniforms(const DbgPipelineLayout& pipelineLayout, const ArrayView<DbgShader*>& shaders, const char* psoDebugName);
 
         void Assert3DTextures();
         void AssertCubeTextures();
@@ -111,8 +122,6 @@ class DbgRenderSystem final : public RenderSystem
 
         std::vector<ResourceViewDescriptor> GetResourceViewInstanceCopy(const ArrayView<ResourceViewDescriptor>& resourceViews);
 
-        void UpdateRenderingCaps();
-
     private:
 
         /* ----- Common objects ----- */
@@ -121,10 +130,6 @@ class DbgRenderSystem final : public RenderSystem
 
         RenderingDebugger*                      debugger_   = nullptr;
         FrameProfile                            profile_;
-
-        const RenderingCapabilities&            caps_;
-        const RenderingFeatures&                features_;
-        const RenderingLimits&                  limits_;
 
         /* ----- Hardware object containers ----- */
 

@@ -13,6 +13,7 @@
 #include "../RenderState/D3D12QueryHeap.h"
 #include "../../CheckedCast.h"
 #include "../../DXCommon/DXCore.h"
+#include <LLGL/Utils/ForRange.h>
 
 
 namespace LLGL
@@ -30,7 +31,7 @@ D3D12CommandQueue::D3D12CommandQueue(
     DetermineTimestampFrequency();
 }
 
-void D3D12CommandQueue::SetName(const char* name)
+void D3D12CommandQueue::SetDebugName(const char* name)
 {
     D3D12SetObjectName(native_.Get(), name);
 }
@@ -42,7 +43,7 @@ void D3D12CommandQueue::Submit(CommandBuffer& commandBuffer)
     /* Execute command list */
     auto& commandBufferD3D = LLGL_CAST(D3D12CommandBuffer&, commandBuffer);
     if (!commandBufferD3D.IsImmediateCmdBuffer())
-        commandBufferD3D.GetCommandContext().ExecuteAndSignal(*this);
+        SubmitCommandContext(commandBufferD3D.GetCommandContext());
 }
 
 /* ----- Queries ----- */
@@ -60,15 +61,15 @@ bool D3D12CommandQueue::QueryResult(
     if (queryHeapD3D.InsideDirtyRange(firstQuery, numQueries))
     {
         queryHeapD3D.FlushDirtyRange(commandContext_.GetCommandList());
-        commandContext_.FinishAndSync(*this);
+        FinishAndSubmitCommandContext(commandContext_, true);
     }
 
     /* Map query result buffer to CPU local memory */
     void* mappedData = queryHeapD3D.Map(firstQuery, numQueries);
     if (mappedData == nullptr)
         return false;
-
-    const D3D12_QUERY_TYPE queryType = queryHeapD3D.GetNativeType();
+     
+    const QueryType queryType = queryHeapD3D.GetType();
     bool result = false;
 
     if (dataSize == numQueries * sizeof(std::uint32_t))
@@ -130,6 +131,33 @@ void D3D12CommandQueue::SignalFence(ID3D12Fence* fence, UINT64 value)
     busy_ = true;
 }
 
+void D3D12CommandQueue::SubmitCommandContext(D3D12CommandContext& commandContext)
+{
+    /* If resource transitions where cached, execute them now to ensure the resources are in the correct state at the beginning and end of the command list */
+    if (commandContext.HasCachedResourceStates())
+    {
+        D3D12CommandContext& cmdQueueContext = GetContext();
+        cmdQueueContext.ExecuteResourceTransitions(commandContext);
+        FinishAndSubmitCommandContext(cmdQueueContext);
+    }
+
+    /* Execute command list on queue and signal */
+    ExecuteCommandList(commandContext.GetCommandList());
+    commandContext.Signal(*this);
+}
+
+void D3D12CommandQueue::FinishAndSubmitCommandContext(D3D12CommandContext& commandContext, bool syncWithGPU)
+{
+    /* Close command list and execute, then reset command allocator for next encoding */
+    commandContext.Close();
+    SubmitCommandContext(commandContext);
+    commandContext.Reset(*this);
+
+    /* Sync CPU/GPU */
+    if (syncWithGPU)
+        WaitIdle();
+}
+
 void D3D12CommandQueue::ExecuteCommandLists(UINT numCommandsLists, ID3D12CommandList* const* commandLists)
 {
     native_->ExecuteCommandLists(numCommandsLists, commandLists);
@@ -164,36 +192,57 @@ void D3D12CommandQueue::DetermineTimestampFrequency()
 }
 
 void D3D12CommandQueue::QueryResultSingleUInt64(
-    D3D12_QUERY_TYPE    queryType,
+    QueryType           queryType,
     const void*         mappedData,
     std::uint32_t       query,
     std::uint64_t&      data)
 {
-    auto mappedDataUInt64 = reinterpret_cast<const std::uint64_t*>(mappedData);
-    if (queryType == D3D12_QUERY_TYPE_TIMESTAMP)
+    switch (queryType)
     {
-        /* Compute difference between start and end timestamps for each output entry */
-        const auto startTimestamp   = mappedDataUInt64[query*2    ];
-        const auto endTimestamp     = mappedDataUInt64[query*2 + 1];
-        const auto deltaTime        = (endTimestamp - startTimestamp);
-
-        if (!isTimestampNanosecs_)
+        case QueryType::TimeElapsed:
         {
-            const auto elapsedTime = (static_cast<double>(deltaTime) * timestampScale_);
-            data = static_cast<std::uint64_t>(elapsedTime + 0.5);
+            /* Compute difference between start and end timestamps for each output entry */
+            auto* mappedDataUInt64 = reinterpret_cast<const std::uint64_t*>(mappedData);
+            const auto startTimestamp   = mappedDataUInt64[query*2    ];
+            const auto endTimestamp     = mappedDataUInt64[query*2 + 1];
+            const auto deltaTime        = (endTimestamp - startTimestamp);
+
+            if (!isTimestampNanosecs_)
+            {
+                const auto elapsedTime = (static_cast<double>(deltaTime) * timestampScale_);
+                data = static_cast<std::uint64_t>(elapsedTime + 0.5);
+            }
+            else
+                data = deltaTime;
         }
-        else
-            data = deltaTime;
-    }
-    else
-    {
-        /* Copy mapped data to output data */
-        data = mappedDataUInt64[query];
+        break;
+
+        case QueryType::StreamOutPrimitivesWritten:
+        {
+            auto* mappedDataSOStats = reinterpret_cast<const D3D12_QUERY_DATA_SO_STATISTICS*>(mappedData);
+            data = mappedDataSOStats[query].NumPrimitivesWritten;
+        }
+        break;
+
+        case QueryType::StreamOutOverflow:
+        {
+            auto* mappedDataSOStats = reinterpret_cast<const D3D12_QUERY_DATA_SO_STATISTICS*>(mappedData);
+            data = (mappedDataSOStats[query].NumPrimitivesWritten != mappedDataSOStats[query].PrimitivesStorageNeeded ? 1 : 0);
+        }
+        break;
+
+        default:
+        {
+            /* Copy mapped data to output data */
+            auto* mappedDataUInt64 = reinterpret_cast<const std::uint64_t*>(mappedData);
+            data = mappedDataUInt64[query];
+        }
+        break;
     }
 }
 
 void D3D12CommandQueue::QueryResultUInt32(
-    D3D12_QUERY_TYPE    queryType,
+    QueryType           queryType,
     const void*         mappedData,
     std::uint32_t       firstQuery,
     std::uint32_t       numQueries,
@@ -201,30 +250,38 @@ void D3D12CommandQueue::QueryResultUInt32(
 {
     for (std::uint32_t i = 0; i < numQueries; ++i)
     {
-        std::uint64_t tempData = 0;
-        QueryResultSingleUInt64(queryType, mappedData, firstQuery + i, tempData);
-        data[i] = static_cast<std::uint32_t>(tempData);
+        std::uint64_t intermeidate64BitData = 0;
+        QueryResultSingleUInt64(queryType, mappedData, firstQuery + i, intermeidate64BitData);
+        data[i] = static_cast<std::uint32_t>(intermeidate64BitData);
     }
 }
 
 void D3D12CommandQueue::QueryResultUInt64(
-    D3D12_QUERY_TYPE    queryType,
+    QueryType           queryType,
     const void*         mappedData,
     std::uint32_t       firstQuery,
     std::uint32_t       numQueries,
     std::uint64_t*      data)
 {
-    if (queryType == D3D12_QUERY_TYPE_TIMESTAMP)
+    switch (queryType)
     {
-        /* Copy individual values of mapped data to output data */
-        for (std::uint32_t i = 0; i < numQueries; ++i)
-            QueryResultSingleUInt64(queryType, mappedData, firstQuery + i, data[i]);
-    }
-    else
-    {
-        /* Copy mapped data to output data */
-        auto mappedDataUInt64 = reinterpret_cast<const std::uint64_t*>(mappedData);
-        ::memcpy(data, &(mappedDataUInt64[firstQuery]), numQueries * sizeof(std::uint64_t));
+        case QueryType::TimeElapsed:
+        case QueryType::StreamOutPrimitivesWritten:
+        case QueryType::StreamOutOverflow:
+        {
+            /* Copy individual values of mapped data to output data */
+            for_range(i, numQueries)
+                QueryResultSingleUInt64(queryType, mappedData, firstQuery + i, data[i]);
+        }
+        break;
+
+        default:
+        {
+            /* Copy mapped data to output data */
+            auto* mappedDataUInt64 = reinterpret_cast<const std::uint64_t*>(mappedData);
+            ::memcpy(data, &(mappedDataUInt64[firstQuery]), numQueries * sizeof(std::uint64_t));
+        }
+        break;
     }
 }
 
@@ -250,14 +307,14 @@ static constexpr bool IsQueryPipelineStatsD3DCompatible()
 }
 
 bool D3D12CommandQueue::QueryResultPipelineStatistics(
-    D3D12_QUERY_TYPE            queryType,
+    QueryType                   queryType,
     const void*                 mappedData,
     std::uint32_t               firstQuery,
     std::uint32_t               numQueries,
     QueryPipelineStatistics*    data)
 {
     /* Query result from data of type: D3D11_QUERY_DATA_PIPELINE_STATISTICS */
-    if (queryType != D3D12_QUERY_TYPE_PIPELINE_STATISTICS)
+    if (queryType != QueryType::PipelineStatistics)
         return false;
 
     if (IsQueryPipelineStatsD3DCompatible())

@@ -37,18 +37,24 @@ static RenderPassDescriptor MakeRenderPassDesc(const SwapChain& swapChain)
 }
 
 DbgSwapChain::DbgSwapChain(SwapChain& instance, const SwapChainDescriptor& desc, const PresentCallback& presentCallback) :
-    instance         { instance        },
-    desc             { desc            },
-    presentCallback_ { presentCallback }
+    instance         { instance             },
+    desc             { desc                 },
+    label            { LLGL_DBG_LABEL(desc) },
+    presentCallback_ { presentCallback      }
 {
     ShareSurfaceAndConfig(instance);
     if (const auto* renderPass = instance.GetRenderPass())
         renderPass_ = MakeUnique<DbgRenderPass>(*renderPass, MakeRenderPassDesc(*this));
 }
 
-void DbgSwapChain::SetName(const char* name)
+void DbgSwapChain::SetDebugName(const char* name)
 {
     DbgSetObjectName(*this, name);
+}
+
+bool DbgSwapChain::IsPresentable() const
+{
+    return instance.IsPresentable();
 }
 
 void DbgSwapChain::Present()
@@ -56,6 +62,7 @@ void DbgSwapChain::Present()
     instance.Present();
     if (presentCallback_)
         presentCallback_();
+    NotifyFramebufferUsed();
 }
 
 std::uint32_t DbgSwapChain::GetCurrentSwapIndex() const
@@ -96,6 +103,29 @@ const RenderPass* DbgSwapChain::GetRenderPass() const
 bool DbgSwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
 {
     return instance.ResizeBuffers(resolution);
+}
+
+void DbgSwapChain::NotifyNextRenderPass(RenderingDebugger* debugger, const RenderPass* renderPass)
+{
+    if (!usedSinceRenderPass_ && debugger != nullptr)
+    {
+        auto* renderPassDbg = LLGL_CAST(const DbgRenderPass*, renderPass);
+        if (!(renderPassDbg != nullptr && renderPassDbg->AnySwapChainAttachmentsLoaded(*this)))
+        {
+            const std::string swapChainLabel = (!label.empty() ? "swap-chain \"" + label + "\"" : "swap-chain");
+            debugger->Warningf(
+                WarningType::PointlessOperation,
+                "%s has not been read or presented since last render pass, but new render pass does not load its previous content",
+                swapChainLabel.c_str()
+            );
+        }
+    }
+    usedSinceRenderPass_ = false;
+}
+
+void DbgSwapChain::NotifyFramebufferUsed()
+{
+    usedSinceRenderPass_ = true;
 }
 
 

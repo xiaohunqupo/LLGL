@@ -16,6 +16,8 @@ namespace LLGL
 {
 
 
+#if LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
 class GLSeparableShader;
 
 class GLProgramPipeline final : public GLShaderPipeline
@@ -31,8 +33,9 @@ class GLProgramPipeline final : public GLShaderPipeline
         ~GLProgramPipeline();
 
         void Bind(GLStateManager& stateMngr) override;
-        void BindResourceSlots(const GLShaderBindingLayout& bindingLayout) override;
+        void BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap = nullptr) override;
         void QueryInfoLogs(Report& report) override;
+        void QueryTexBufferNames(std::set<std::string>& outSamplerBufferNames, std::set<std::string>& outImageBufferNames) const override;
 
     private:
 
@@ -44,6 +47,27 @@ class GLProgramPipeline final : public GLShaderPipeline
         GLSeparableShader* separableShaders_[LLGL_MAX_NUM_GL_SHADERS_PER_PIPELINE] = {};
 
 };
+
+#else // LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
+class GLProgramPipeline final : public GLShaderPipeline
+{
+
+    public:
+
+        GLProgramPipeline(
+            std::size_t             numShaders,
+            Shader* const*          shaders,
+            GLShader::Permutation   permutation = GLShader::PermutationDefault
+        );
+
+        void Bind(GLStateManager& stateMngr) override;
+        void BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap = nullptr) override;
+        void QueryInfoLogs(Report& report) override;
+
+};
+
+#endif // /LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
 
 
 } // /namespace LLGL

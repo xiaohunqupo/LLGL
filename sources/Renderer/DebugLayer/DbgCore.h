@@ -13,6 +13,7 @@
 #include <LLGL/RenderingDebugger.h>
 #include <LLGL/Container/Strings.h>
 #include "../CheckedCast.h"
+#include "../../Core/Assertion.h"
 #include "../../Core/MacroUtils.h"
 #include "../../Core/PrintfUtils.h"
 #include <type_traits>
@@ -22,11 +23,8 @@ namespace LLGL
 {
 
 
-#define LLGL_DBG_SOURCE()                       \
-    {                                           \
-        if (debugger_ != nullptr)               \
-            debugger_->SetSource(__FUNCTION__); \
-    }
+#define LLGL_DBG_SOURCE() \
+    DbgSetSourceChecked(debugger_, __FUNCTION__)
 
 #define LLGL_DBG_ERROR(TYPE, FORMAT, ...)                                   \
     do                                                                      \
@@ -47,6 +45,25 @@ namespace LLGL
 #define LLGL_DBG_ERROR_NOT_SUPPORTED(FEATURE) \
     LLGL_DBG_ERROR(ErrorType::UnsupportedFeature, UTF8String(FEATURE) + " not supported")
 
+#define LLGL_DBG_LABEL(DESC) \
+    ((DESC).debugName != nullptr ? std::string{ (DESC).debugName } : std::string{})
+
+#define LLGL_DBG_CAST(TYPE, OBJ)                                                                \
+    (                                                                                           \
+        [&]() -> void { LLGL_ASSERT(&OBJ != nullptr, #OBJ " reference must not be null"); }(),  \
+        ObjectCast<TYPE>(OBJ)                                                                   \
+    )
+
+// Sets the current source name and returns true if the debugger is set.
+inline bool DbgSetSourceChecked(RenderingDebugger* debugger, const char* sourceName)
+{
+    if (debugger != nullptr)
+    {
+        debugger->SetSource(sourceName);
+        return true;
+    }
+    return false;
+}
 
 // Sets the name of the specified debug layer object.
 template <typename T>
@@ -59,7 +76,7 @@ inline void DbgSetObjectName(T& obj, const char* name)
         obj.label.clear();
 
     /* Forward call to instance */
-    obj.instance.SetName(name);
+    obj.instance.SetDebugName(name);
 }
 
 // Returns the debug wrapper of the specified instance or null if the input is null.

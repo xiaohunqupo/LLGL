@@ -28,6 +28,9 @@ namespace LLGL
 {
 
 
+constexpr UINT D3D12SwapChain::maxNumColorBuffers;
+constexpr UINT D3D12SwapChain::numDebugNames;
+
 D3D12SwapChain::D3D12SwapChain(
     D3D12RenderSystem&              renderSystem,
     const SwapChainDescriptor&      desc,
@@ -35,22 +38,30 @@ D3D12SwapChain::D3D12SwapChain(
 :
     SwapChain           { desc                                                            },
     renderSystem_       { renderSystem                                                    },
-    frameFence_         { renderSystem.GetDXDevice()                                      },
     depthStencilFormat_ { DXPickDepthStencilFormat(desc.depthBits, desc.stencilBits)      },
-    numColorBuffers_    { Clamp(desc.swapBuffers, 1u, D3D12SwapChain::maxNumColorBuffers) }
+    frameFence_         { renderSystem.GetDXDevice()                                      },
+    numColorBuffers_    { Clamp(desc.swapBuffers, 1u, D3D12SwapChain::maxNumColorBuffers) },
+    tearingSupported_   { renderSystem.IsTearingSupported()                               }
 {
     /* Store reference to command queue */
     commandQueue_ = LLGL_CAST(D3D12CommandQueue*, renderSystem_.GetCommandQueue());
 
     /* Setup surface for the swap-chain */
-    SetOrCreateSurface(surface, desc.resolution, desc.fullscreen, nullptr);
+    SetOrCreateSurface(surface, SwapChain::BuildDefaultSurfaceTitle(renderSystem.GetRendererInfo()), desc.resolution, desc.fullscreen);
 
     /* Create device resources and window dependent resource */
     CreateDescriptorHeaps(renderSystem.GetDevice(), desc.samples);
-    CreateResolutionDependentResources(desc.resolution);
+    CreateResolutionDependentResources(GetResolution());
 
     /* Create default render pass */
     defaultRenderPass_.BuildAttachments(1, &colorFormat_, depthStencilFormat_, sampleDesc_);
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
+
+    /* Show default surface */
+    if (!surface)
+        ShowSurface();
 }
 
 D3D12SwapChain::~D3D12SwapChain()
@@ -59,28 +70,65 @@ D3D12SwapChain::~D3D12SwapChain()
     MoveToNextFrame();
 }
 
-void D3D12SwapChain::SetName(const char* name)
+void D3D12SwapChain::SetDebugName(const char* name)
 {
-    D3D12SetObjectNameSubscript(rtvDescHeap_.Get(), name, ".RTV");
-    D3D12SetObjectNameSubscript(dsvDescHeap_.Get(), name, ".DSV");
-
-    std::string subscript;
-    for_range(i, D3D12SwapChain::maxNumColorBuffers)
+    if (name != nullptr)
     {
-        subscript = (".BackBuffer" + std::to_string(i));
-        D3D12SetObjectNameSubscript(colorBuffers_[i].Get(), name, subscript.c_str());
+        D3D12SetObjectNameSubscript(rtvDescHeap_.Get(), name, ".RTV");
+        D3D12SetObjectNameSubscript(dsvDescHeap_.Get(), name, ".DSV");
 
-        subscript = (".BackBufferMS" + std::to_string(i));
-        D3D12SetObjectNameSubscript(colorBuffersMS_[i].Get(), name, subscript.c_str());
+        std::string subscript;
+        for_range(i, D3D12SwapChain::maxNumColorBuffers)
+        {
+            subscript = (".BackBuffer" + std::to_string(i));
+            D3D12SetObjectNameSubscript(colorBuffers_[i].Get(), name, subscript.c_str());
+
+            subscript = (".BackBufferMS" + std::to_string(i));
+            D3D12SetObjectNameSubscript(colorBuffersMS_[i].Get(), name, subscript.c_str());
+        }
+
+        D3D12SetObjectNameSubscript(depthStencil_.Get(), name, ".DS");
+
+        hasDebugName_ = true;
     }
+    else
+    {
+        D3D12SetObjectName(rtvDescHeap_.Get(), nullptr);
+        D3D12SetObjectName(dsvDescHeap_.Get(), nullptr);
 
-    D3D12SetObjectNameSubscript(depthStencil_.Get(), name, ".DS");
+        for_range(i, D3D12SwapChain::maxNumColorBuffers)
+        {
+            D3D12SetObjectName(colorBuffers_[i].Get(), nullptr);
+            D3D12SetObjectName(colorBuffersMS_[i].Get(), nullptr);
+        }
+
+        D3D12SetObjectName(depthStencil_.Get(), nullptr);
+
+        hasDebugName_ = false;
+    }
+}
+
+bool D3D12SwapChain::IsPresentable() const
+{
+    return true; // dummy
 }
 
 void D3D12SwapChain::Present()
 {
     /* Present swap-chain with vsync interval */
-    HRESULT hr = swapChainDXGI_->Present(syncInterval_, 0);
+    const bool tearingEnabled   = (tearingSupported_ && windowedMode_ && syncInterval_ == 0);
+    const UINT presentFlags     = (tearingEnabled ? DXGI_PRESENT_ALLOW_TEARING : 0u);
+
+    HRESULT hr = S_OK;
+    if (isPresentationDirty_)
+    {
+        /* Don't perform vsync when the back buffer has been resized to allow a smooth window resizing */
+        isPresentationDirty_ = false;
+        hr = swapChainDXGI_->Present(0, presentFlags);
+    }
+    else
+        hr = swapChainDXGI_->Present(syncInterval_, presentFlags);
+
     DXThrowIfFailed(hr, "failed to present DXGI swap chain");
 
     /* Advance frame counter */
@@ -310,6 +358,10 @@ HRESULT D3D12SwapChain::CopySubresourceRegion(
 bool D3D12SwapChain::ResizeBuffersPrimary(const Extent2D& resolution)
 {
     CreateResolutionDependentResources(resolution);
+
+    /* Mark presentation as dirty to avoid vsync on the next presentation; This allows a smooth window resizing like in other backends */
+    isPresentationDirty_ = true;
+
     return true;
 }
 
@@ -364,6 +416,11 @@ HRESULT D3D12SwapChain::CreateResolutionDependentResources(const Extent2D& resol
     /* Wait until all previous GPU work is complete */
     renderSystem_.SyncGPU();
 
+    /* Store current debug names */
+    std::string debugNames[D3D12SwapChain::numDebugNames];
+    if (hasDebugName_)
+        StoreDebugNames(debugNames);
+
     /* Release previous window size dependent resources, and reset fence values to current value */
     for_range(i, numColorBuffers_)
     {
@@ -377,13 +434,16 @@ HRESULT D3D12SwapChain::CreateResolutionDependentResources(const Extent2D& resol
     /* Get framebuffer size */
     if (swapChainDXGI_)
     {
+        DXGI_SWAP_CHAIN_DESC desc;
+        swapChainDXGI_->GetDesc(&desc);
+
         /* Resize swap chain */
         HRESULT hr = swapChainDXGI_->ResizeBuffers(
             numColorBuffers_,
             resolution.width,
             resolution.height,
             colorFormat_,
-            0
+            desc.Flags
         );
 
         if (hr == DXGI_ERROR_DEVICE_REMOVED || hr == DXGI_ERROR_DEVICE_RESET)
@@ -413,12 +473,15 @@ HRESULT D3D12SwapChain::CreateResolutionDependentResources(const Extent2D& resol
             swapChainDesc.Scaling               = DXGI_SCALING_NONE;
             swapChainDesc.SwapEffect            = DXGI_SWAP_EFFECT_FLIP_DISCARD;
             swapChainDesc.AlphaMode             = DXGI_ALPHA_MODE_IGNORE;
-            swapChainDesc.Flags                 = 0;
+            swapChainDesc.Flags                 = (tearingSupported_ ? DXGI_SWAP_CHAIN_FLAG_ALLOW_TEARING : 0u);
         }
-        auto swapChain = renderSystem_.CreateDXSwapChain(swapChainDesc, wndHandle.window);
+        auto swapChain = renderSystem_.CreateDXSwapChain(swapChainDesc, &wndHandle, sizeof(wndHandle));
 
         swapChain.As(&swapChainDXGI_);
     }
+
+    /* Store windowed mode for tearing support */
+    windowedMode_ = !DXGetFullscreenState(swapChainDXGI_.Get());
 
     /* Create color buffer render target views (RTV) */
     CreateColorBufferRTVs(device, resolution);
@@ -429,6 +492,10 @@ HRESULT D3D12SwapChain::CreateResolutionDependentResources(const Extent2D& resol
     /* Create depth-stencil buffer (is used) */
     if (HasDepthBuffer())
         CreateDepthStencil(device, resolution);
+
+    /* Restore debug names with new swap-chain buffers */
+    if (hasDebugName_)
+        RestoreDebugNames(debugNames);
 
     return S_OK;
 }
@@ -462,8 +529,9 @@ void D3D12SwapChain::CreateColorBufferRTVs(ID3D12Device* device, const Extent2D&
         for_range(i, numColorBuffers_)
         {
             /* Create render target resource */
+            const CD3DX12_HEAP_PROPERTIES heapProperties{ D3D12_HEAP_TYPE_DEFAULT };
             HRESULT hr = device->CreateCommittedResource(
-                &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+                &heapProperties,
                 D3D12_HEAP_FLAG_NONE,
                 &tex2DMSDesc,
                 D3D12_RESOURCE_STATE_RENDER_TARGET,
@@ -501,12 +569,14 @@ void D3D12SwapChain::CreateDepthStencil(ID3D12Device* device, const Extent2D& re
         (D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE)
     );
 
+    const CD3DX12_HEAP_PROPERTIES heapProperties{ D3D12_HEAP_TYPE_DEFAULT };
+    const CD3DX12_CLEAR_VALUE clearValue{ depthStencilFormat_, 1.0f, 0 };
     HRESULT hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &heapProperties,
         D3D12_HEAP_FLAG_NONE,
         &tex2DDesc,
         D3D12_RESOURCE_STATE_DEPTH_WRITE,
-        &CD3DX12_CLEAR_VALUE(depthStencilFormat_, 1.0f, 0),
+        &clearValue,
         IID_PPV_ARGS(depthStencil_.native.ReleaseAndGetAddressOf())
     );
     DXThrowIfCreateFailed(hr, "ID3D12Resource", "for swap-chain depth-stencil buffer");
@@ -527,6 +597,26 @@ void D3D12SwapChain::MoveToNextFrame()
     /* Wait until the fence value of the next frame is signaled, so we know the next frame is ready to start */
     frameFence_.WaitForHigherSignal(frameFenceValues_[currentColorBuffer_]);
     frameFenceValues_[currentColorBuffer_] = currentFenceValue + 1;
+}
+
+void D3D12SwapChain::StoreDebugNames(std::string (&debugNames)[D3D12SwapChain::numDebugNames])
+{
+    for_range(i, D3D12SwapChain::maxNumColorBuffers)
+    {
+        debugNames[i*2    ] = D3D12GetObjectName(colorBuffers_[i].Get());
+        debugNames[i*2 + 1] = D3D12GetObjectName(colorBuffersMS_[i].Get());
+    }
+    debugNames[D3D12SwapChain::maxNumColorBuffers*2] = D3D12GetObjectName(depthStencil_.Get());
+}
+
+void D3D12SwapChain::RestoreDebugNames(const std::string (&debugNames)[D3D12SwapChain::numDebugNames])
+{
+    for_range(i, D3D12SwapChain::maxNumColorBuffers)
+    {
+        D3D12SetObjectName(colorBuffers_[i].Get(), debugNames[i*2].c_str());
+        D3D12SetObjectName(colorBuffersMS_[i].Get(), debugNames[i*2 + 1].c_str());
+    }
+    D3D12SetObjectName(depthStencil_.Get(), debugNames[D3D12SwapChain::maxNumColorBuffers*2].c_str());
 }
 
 

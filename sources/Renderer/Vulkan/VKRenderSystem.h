@@ -15,8 +15,9 @@
 #include "../ContainerTypes.h"
 #include "Memory/VKDeviceMemoryManager.h"
 
-#include "VKCommandQueue.h"
-#include "VKCommandBuffer.h"
+#include "Command/VKCommandQueue.h"
+#include "Command/VKCommandBuffer.h"
+#include "Command/VKCommandContext.h"
 #include "VKSwapChain.h"
 
 #include "Buffer/VKBuffer.h"
@@ -61,10 +62,14 @@ class VKRenderSystem final : public RenderSystem
 
     private:
 
+        #include <LLGL/Backend/RenderSystem.Internal.inl>
+
+    private:
+
         void CreateInstance(const RendererConfigurationVulkan* config);
         void CreateDebugReportCallback();
-        void PickPhysicalDevice();
-        void CreateLogicalDevice();
+        bool PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice = VK_NULL_HANDLE);
+        void CreateLogicalDevice(VkDevice customLogicalDevice = VK_NULL_HANDLE);
 
         bool IsLayerRequired(const char* name, const RendererConfigurationVulkan* config) const;
 
@@ -76,6 +81,9 @@ class VKRenderSystem final : public RenderSystem
             VkDeviceSize                dataSize
         );
 
+        VkCommandBuffer AllocCommandBuffer(bool begin = true);
+        void FlushCommandBuffer(VkCommandBuffer commandBuffer);
+
     private:
 
         /* ----- Common objects ----- */
@@ -84,14 +92,14 @@ class VKRenderSystem final : public RenderSystem
 
         VKPhysicalDevice                        physicalDevice_;
         VKDevice                                device_;
-
-        VKPtr<VkDebugReportCallbackEXT>         debugReportCallback_;
+        VKCommandContext                        context_;
 
         bool                                    debugLayerEnabled_      = false;
+        VKPtr<VkDebugReportCallbackEXT>         debugReportCallback_;
 
         std::unique_ptr<VKDeviceMemoryManager>  deviceMemoryMngr_;
 
-        VKGraphicsPipelineLimits                gfxPipelineLimits_;
+        VKGraphicsPipelineLimits                graphicsPipelineLimits_;
 
         /* ----- Hardware object containers ----- */
 

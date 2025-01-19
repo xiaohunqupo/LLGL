@@ -8,9 +8,12 @@
 #include "GLProgramPipeline.h"
 #include "GLShaderBindingLayout.h"
 #include "GLSeparableShader.h"
+#include "GLShaderProgram.h"
 #include "../Ext/GLExtensions.h"
 #include "../Ext/GLExtensionRegistry.h"
 #include "../RenderState/GLStateManager.h"
+#include "../../../Core/Assertion.h"
+#include "../../../Core/Exception.h"
 #include <LLGL/Report.h>
 #include <LLGL/Utils/ForRange.h>
 
@@ -19,16 +22,18 @@ namespace LLGL
 {
 
 
+#if LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
 static GLuint GLCreateProgramPipeline()
 {
     GLuint id = 0;
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glCreateProgramPipelines(1, &id);
     }
     else
-    #endif
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         /* Generate new program pipeline and initialize to its default state via glBindProgramPipeline */
         glGenProgramPipelines(1, &id);
@@ -79,10 +84,10 @@ void GLProgramPipeline::Bind(GLStateManager& stateMngr)
     stateMngr.BindProgramPipeline(GetID());
 }
 
-void GLProgramPipeline::BindResourceSlots(const GLShaderBindingLayout& bindingLayout)
+void GLProgramPipeline::BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap)
 {
     for_range(i, static_cast<std::size_t>(GetSignature().GetNumShaders()))
-        separableShaders_[i]->BindResourceSlots(bindingLayout);
+        separableShaders_[i]->BindResourceSlots(bindingLayout, bufferInterfaceMap);
 }
 
 void GLProgramPipeline::QueryInfoLogs(Report& report)
@@ -94,6 +99,14 @@ void GLProgramPipeline::QueryInfoLogs(Report& report)
         separableShaders_[i]->QueryInfoLog(log, hasErrors);
 
     report.Reset(std::move(log), hasErrors);
+}
+
+void GLProgramPipeline::QueryTexBufferNames(std::set<std::string>& outSamplerBufferNames, std::set<std::string>& outImageBufferNames) const
+{
+    outSamplerBufferNames.clear();
+    outImageBufferNames.clear();
+    for_range(i, GetSignature().GetNumShaders())
+        GLShaderProgram::QueryTexBufferNames(separableShaders_[i]->GetID(), outSamplerBufferNames, outImageBufferNames);
 }
 
 
@@ -114,6 +127,7 @@ void GLProgramPipeline::UseProgramStages(
     for_range(i, numShaders)
     {
         GLSeparableShader* separableShader = shaders[i];
+        LLGL_ASSERT_PTR(separableShader);
         if (GLbitfield stage = ToGLShaderStageBit(separableShader->GetType()))
         {
             const GLShader::Permutation permutationForShader =
@@ -129,6 +143,35 @@ void GLProgramPipeline::UseProgramStages(
 
     BuildSignature(numShaders, reinterpret_cast<const Shader* const*>(shaders), permutation);
 }
+
+#else // LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
+
+GLProgramPipeline::GLProgramPipeline(
+    std::size_t             numShaders,
+    Shader* const*          shaders,
+    GLShader::Permutation   permutation)
+:
+    GLShaderPipeline { 0 }
+{
+    LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_separate_shader_objects");
+}
+
+void GLProgramPipeline::Bind(GLStateManager& stateMngr)
+{
+    // dummy
+}
+
+void GLProgramPipeline::BindResourceSlots(const GLShaderBindingLayout& bindingLayout, const GLShaderBufferInterfaceMap* bufferInterfaceMap)
+{
+    // dummy
+}
+
+void GLProgramPipeline::QueryInfoLogs(Report& report)
+{
+    // dummy
+}
+
+#endif // /LLGL_GLEXT_SEPARATE_SHADER_OBJECTS
 
 
 } // /namespace LLGL

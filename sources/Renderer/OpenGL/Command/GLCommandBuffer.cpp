@@ -6,6 +6,7 @@
  */
 
 #include "GLCommandBuffer.h"
+#include "../Buffer/GLBufferWithXFB.h"
 #include "../RenderState/GLState.h"
 #include "../RenderState/GLPipelineLayout.h"
 #include "../RenderState/GLPipelineState.h"
@@ -21,6 +22,7 @@ void GLCommandBuffer::ResetRenderState()
 {
     renderState_.boundPipelineLayout    = nullptr;
     renderState_.boundPipelineState     = nullptr;
+    renderState_.boundBufferWithFxb     = nullptr;
 }
 
 void GLCommandBuffer::SetIndexFormat(bool indexType16Bits, std::uint64_t offset)
@@ -52,6 +54,34 @@ void GLCommandBuffer::SetPipelineRenderState(const GLPipelineState& pipelineStat
         renderState_.drawMode       = graphicsPSO.GetDrawMode();
         renderState_.primitiveMode  = graphicsPSO.GetPrimitiveMode();
     }
+
+    /* Store barrier flags; These must be invalidated when a new resource or resource-heap is set */
+    renderState_.activeBarriers = pipelineStateGL.GetBarriersBitfield();
+    renderState_.dirtyBarriers  = 0;
+}
+
+void GLCommandBuffer::SetTransformFeedback(GLBufferWithXFB& bufferWithXfbGL)
+{
+    renderState_.boundBufferWithFxb = &bufferWithXfbGL;
+}
+
+void GLCommandBuffer::InvalidateMemoryBarriers(GLbitfield barriers)
+{
+    renderState_.dirtyBarriers |= (renderState_.activeBarriers & barriers);
+}
+
+void GLCommandBuffer::InvalidateMemoryBarriersForStorageResource(long resourceBindFlags, GLbitfield barriers)
+{
+    if ((resourceBindFlags & BindFlags::Storage) != 0)
+        InvalidateMemoryBarriers(barriers);
+}
+
+LLGL_NODISCARD
+GLbitfield GLCommandBuffer::FlushAndGetMemoryBarriers()
+{
+    GLbitfield barriers = renderState_.dirtyBarriers;
+    renderState_.dirtyBarriers = 0;
+    return barriers;
 }
 
 /* ----- Extensions ----- */

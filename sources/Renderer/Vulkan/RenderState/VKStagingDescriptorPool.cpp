@@ -70,7 +70,7 @@ void VKStagingDescriptorPool::Initialize(
         poolCreateInfo.poolSizeCount    = numPoolSizes;
         poolCreateInfo.pPoolSizes       = poolSizes;
     }
-    auto result = vkCreateDescriptorPool(device_, &poolCreateInfo, nullptr, descriptorPool_.ReleaseAndGetAddressOf());
+    VkResult result = vkCreateDescriptorPool(device_, &poolCreateInfo, nullptr, descriptorPool_.ReleaseAndGetAddressOf());
     VKThrowIfFailed(result, "failed to create Vulkan descriptor pool");
 }
 
@@ -120,7 +120,7 @@ VkDescriptorSet VKStagingDescriptorPool::AllocateDescriptorSet(
         allocInfo.pSetLayouts           = &setLayout;
     }
     VkDescriptorSet descriptorSet;
-    auto result = vkAllocateDescriptorSets(device_, &allocInfo, &descriptorSet);
+    VkResult result = vkAllocateDescriptorSets(device_, &allocInfo, &descriptorSet);
     VKThrowIfFailed(result, "failed to allocate Vulkan descriptor sets");
     return descriptorSet;
 }

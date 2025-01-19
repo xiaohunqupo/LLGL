@@ -8,15 +8,21 @@
 #include "TestbedContext.h"
 #include <string>
 #include <regex>
+#include <exception>
+#include <stdio.h>
+
+#if _WIN32
+#   include <Windows.h>
+#endif
 
 
 using namespace LLGL;
 
-static unsigned RunRendererIndependentTests()
+static unsigned RunRendererIndependentTests(int argc, char* argv[])
 {
     Log::Printf("Run renderer independent tests\n");
     TestbedContext::PrintSeparator();
-    unsigned failures = TestbedContext::RunRendererIndependentTests();
+    unsigned failures = TestbedContext::RunRendererIndependentTests(argc, argv);
     TestbedContext::PrintSeparator();
     return failures;
 }
@@ -87,32 +93,73 @@ static bool HasProgramArgument(int argc, char* argv[], const char* search)
 
 static void PrintHelpDocs()
 {
+    // Find available modules
+    auto availableModules = RenderSystem::FindModules();
+    std::string availableModulesStr;
+
+    auto ListModuleIfAvailable = [&availableModules, &availableModulesStr](const char* name, const char* docu) -> void
+    {
+        auto it = std::find_if(
+            availableModules.begin(), availableModules.end(),
+            [name](const std::string& entry) -> bool
+            {
+                return (entry.compare(name) == 0);
+            }
+        );
+        if (it != availableModules.end())
+            availableModulesStr += docu;
+    };
+
+    ListModuleIfAvailable("Direct3D11", "  d3d11, dx11, direct3d11 ............ Direct3D 11 module\n");
+    ListModuleIfAvailable("Direct3D12", "  d3d12, dx12, direct3d12 ............ Direct3D 12 module\n");
+    ListModuleIfAvailable("OpenGL",     "  gl, gl[VER], opengl, opengl[VER] ... OpenGL module with optional version, e.g. gl330\n");
+    ListModuleIfAvailable("Metal",      "  mt, mtl, metal ..................... Metal module\n");
+    ListModuleIfAvailable("Vulkan",     "  vk, vulkan ......................... Vulkan module\n");
+
+    // Print help listing
     Log::Printf(
         "Testbed MODULES* OPTIONS*\n"
         "  -> Runs LLGL's unit tests\n"
         "\n"
         "MODULE:\n"
-        "  gl, gl[VER], opengl, opengl[VER] ... OpenGL module with optional version, e.g. gl330\n"
-        "  vk, vulkan ......................... Vulkan module\n"
-        "  mt, mtl, metal ..................... Metal module\n"
-        "  d3d11, dx11, direct3d11 ............ Direct3D 11 module\n"
-        "  d3d12, dx12, direct3d12 ............ Direct3D 12 module\n"
+        "%s"
         "\n"
         "OPTIONS:\n"
-        "  -d, --debug ........................ Enable validation debug layers\n"
+        "  -c, --color ........................ Enable colored console output\n"
+        "  -d, --debug [=OPT] ................. Enable debug layers (gpu, cpu, gpu+cpu)\n"
         "  -f, --fast ......................... Run fast test; skips certain configurations\n"
         "  -g, --greedy ....................... Keep running each test even after failure\n"
         "  -h, --help ......................... Print this help document\n"
         "  -p, --pedantic ..................... Disable diff-checking threshold\n"
+        "  -run=LIST .......................... Only run tests in comma separated list\n"
         "  -s, --santiy-check ................. Print some test results even on success\n"
         "  -t, --timing ....................... Print timing results\n"
         "  -v, --verbose ...................... Print more information\n"
+        "  --amd .............................. Prefer AMD device\n"
+        "  --intel ............................ Prefer Intel device\n"
+        "  --nvidia ........................... Prefer NVIDIA device\n",
+        availableModulesStr.c_str()
     );
 }
 
-int main(int argc, char* argv[])
+static int GuardedMain(int argc, char* argv[])
 {
-    Log::RegisterCallbackStd();
+    // Register standard output log and check if colored output is enabled
+    long stdOutFlags = 0;
+
+    if (HasProgramArgument(argc, argv, "-c") || HasProgramArgument(argc, argv, "--color"))
+        stdOutFlags |= LLGL::Log::StdOutFlags::Colored;
+
+    Log::RegisterCallbackStd(stdOutFlags);
+
+    #if _WIN32
+    Log::RegisterCallback(
+        [](Log::ReportType type, const char* text, void* userData) -> void
+        {
+            ::OutputDebugStringA(text);
+        }
+    );
+    #endif
 
     // If -h or --help is specified, only print help documentation and exit
     if (HasProgramArgument(argc, argv, "-h") || HasProgramArgument(argc, argv, "--help"))
@@ -140,7 +187,7 @@ int main(int argc, char* argv[])
     unsigned modulesWithFailedTests = 0;
 
     // Run renderer independent tests
-    if (RunRendererIndependentTests() != 0)
+    if (RunRendererIndependentTests(argc - 1, argv + 1) != 0)
         ++modulesWithFailedTests;
 
     // Run renderer specific tests
@@ -152,11 +199,11 @@ int main(int argc, char* argv[])
 
     // Print summary
     if (modulesWithFailedTests == 0)
-        Log::Printf(" ==> ALL MODULES PASSED\n");
+        Log::Printf(Log::ColorFlags::BrightGreen, " ==> ALL MODULES PASSED\n");
     else if (modulesWithFailedTests == 1)
-        Log::Printf(" ==> 1 MODULE FAILED\n");
+        Log::Errorf(Log::ColorFlags::StdError, " ==> 1 MODULE FAILED\n");
     else if (modulesWithFailedTests > 1)
-        Log::Printf(" ==> %u MODULES FAILED\n", modulesWithFailedTests);
+        Log::Errorf(Log::ColorFlags::StdError, " ==> %u MODULES FAILED\n", modulesWithFailedTests);
 
     #ifdef _WIN32
     system("pause");
@@ -166,5 +213,85 @@ int main(int argc, char* argv[])
     return static_cast<int>(modulesWithFailedTests);
 }
 
+#ifdef _MSC_VER
+
+// Declare function that is not directly exposed in LLGL
+namespace LLGL
+{
+    LLGL_EXPORT UTF8String DebugStackTrace(unsigned firstStackFrame = 0, unsigned maxNumStackFrames = 64);
+};
+
+// Only report exception with callstack on these critical exceptions.
+// There are other exceptions that are of no interest for this testbed,
+// such as floating-point exceptions (they can be ignored), debugging exceptions etc.
+static bool IsExceptionCodeOfInterest(DWORD exceptionCode)
+{
+    switch (exceptionCode)
+    {
+        case EXCEPTION_ACCESS_VIOLATION:
+        case EXCEPTION_ARRAY_BOUNDS_EXCEEDED:
+        case EXCEPTION_DATATYPE_MISALIGNMENT:
+        case EXCEPTION_ILLEGAL_INSTRUCTION:
+        case EXCEPTION_IN_PAGE_ERROR:
+        case EXCEPTION_INT_DIVIDE_BY_ZERO:
+        case EXCEPTION_INVALID_DISPOSITION:
+        case EXCEPTION_NONCONTINUABLE_EXCEPTION:
+        case EXCEPTION_PRIV_INSTRUCTION:
+        case EXCEPTION_STACK_OVERFLOW:
+            return true;
+        default:
+            return false;
+    }
+}
+
+static LONG WINAPI TestbedVectoredExceptionHandler(EXCEPTION_POINTERS* e)
+{
+    if (IsExceptionCodeOfInterest(e->ExceptionRecord->ExceptionCode))
+    {
+        LLGL::UTF8String stackTrace = DebugStackTrace();
+        ::fprintf(
+            stderr,
+            "Exception during test run: Address=%p, Code=0x%08X\n"
+            "Callstack:\n"
+            "----------\n"
+            "%s\n",
+            e->ExceptionRecord->ExceptionAddress, static_cast<unsigned>(e->ExceptionRecord->ExceptionCode), stackTrace.c_str()
+        );
+    }
+    return EXCEPTION_CONTINUE_SEARCH;
+}
+
+#endif // /_MSC_VER
+
+int main(int argc, char* argv[])
+{
+    #ifdef _MSC_VER
+
+    AddVectoredExceptionHandler(1, TestbedVectoredExceptionHandler);
+    __try
+    {
+        return GuardedMain(argc, argv);
+    }
+    __except(EXCEPTION_EXECUTE_HANDLER)
+    {
+        ::fflush(stderr);
+        return 1;
+    }
+
+    #else
+
+    try
+    {
+        return GuardedMain(argc, argv);
+    }
+    catch (const std::exception& e)
+    {
+        ::fprintf(stderr, "Exception during test run: %s\n", e.what());
+        ::fflush(stderr);
+        return 1;
+    }
+
+    #endif
+}
 
 

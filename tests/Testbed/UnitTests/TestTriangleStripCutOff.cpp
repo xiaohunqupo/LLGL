@@ -76,16 +76,8 @@ DEF_TEST( TriangleStripCutOff )
     for_range(i, numFormats)
     {
         psoDesc.indexFormat = indexFormats[i];
-        pso[i] = renderer->CreatePipelineState(psoDesc);
-
-        if (const Report* report = pso[i]->GetReport())
-        {
-            if (report->HasErrors())
-            {
-                Log::Errorf("PSO creation with index format LLGL::Format::%s failed:\n%s", ToString(indexFormats[i]), report->GetText());
-                return TestResult::FailedErrors;
-            }
-        }
+        const std::string psoName = "Test.StripCutOff.Format(" + std::string(ToString(indexFormats[i])) + ")";
+        CREATE_GRAPHICS_PSO_EXT(pso[i], psoDesc, psoName.c_str());
     }
 
     Texture* readbackTex[2] = {};
@@ -97,7 +89,7 @@ DEF_TEST( TriangleStripCutOff )
         cmdBuffer->BeginRenderPass(*swapChain);
         {
             // Draw scene
-            cmdBuffer->SetViewport(resolution);
+            cmdBuffer->SetViewport(opt.resolution);
 
             // Draw first capture with undefined index format
             cmdBuffer->Clear(ClearFlags::Color);
@@ -110,9 +102,9 @@ DEF_TEST( TriangleStripCutOff )
                 cmdBuffer->SetIndexBuffer(*indexBuf, Format::R32UInt, indicesUI32Offset);
                 cmdBuffer->DrawIndexed(numUI32Indices, 0);
             }
-            readbackTex[0] = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex[0] = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
 
-            // Draw first capture with undefined index format
+            // Draw second capture with fixed index format R16UInt (pso[1]) and R32UInt (pso[2])
             cmdBuffer->Clear(ClearFlags::Color);
             {
                 cmdBuffer->SetPipelineState(*pso[1]);
@@ -123,7 +115,7 @@ DEF_TEST( TriangleStripCutOff )
                 cmdBuffer->SetIndexBuffer(*indexBuf, Format::R32UInt, indicesUI32Offset);
                 cmdBuffer->DrawIndexed(numUI32Indices, 0);
             }
-            readbackTex[1] = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), resolution);
+            readbackTex[1] = CaptureFramebuffer(*cmdBuffer, swapChain->GetColorFormat(), opt.resolution);
         }
         cmdBuffer->EndRenderPass();
     }

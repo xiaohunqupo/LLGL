@@ -40,10 +40,31 @@ VKRenderSystem::VKRenderSystem(const RenderSystemDescriptor& renderSystemDesc) :
     /* Extract optional renderer configuartion */
     auto* rendererConfigVK = GetRendererConfiguration<RendererConfigurationVulkan>(renderSystemDesc);
 
-    /* Create Vulkan instance and device objects */
-    CreateInstance(rendererConfigVK);
-    PickPhysicalDevice();
-    CreateLogicalDevice();
+    constexpr long preferredDeviceMask = (RenderSystemFlags::PreferNVIDIA | RenderSystemFlags::PreferAMD | RenderSystemFlags::PreferIntel);
+    const long preferredDeviceFlags = (renderSystemDesc.flags & preferredDeviceMask);
+
+    if (auto* customNativeHandle = GetRendererNativeHandle<Vulkan::RenderSystemNativeHandle>(renderSystemDesc))
+    {
+        /* Store weak references to native handles */
+        instance_ = VKPtr<VkInstance>{ customNativeHandle->instance };
+        if (debugLayerEnabled_)
+            CreateDebugReportCallback();
+        VKLoadInstanceExtensions(instance_);
+        if (!PickPhysicalDevice(preferredDeviceFlags, customNativeHandle->physicalDevice))
+            return;
+        CreateLogicalDevice(customNativeHandle->device);
+    }
+    else
+    {
+        /* Create Vulkan instance and device objects */
+        CreateInstance(rendererConfigVK);
+        if (debugLayerEnabled_)
+            CreateDebugReportCallback();
+        VKLoadInstanceExtensions(instance_);
+        if (!PickPhysicalDevice(preferredDeviceFlags))
+            return;
+        CreateLogicalDevice();
+    }
 
     /* Create default resources */
     VKPipelineLayout::CreateDefault(device_);
@@ -68,7 +89,7 @@ VKRenderSystem::~VKRenderSystem()
 
 SwapChain* VKRenderSystem::CreateSwapChain(const SwapChainDescriptor& swapChainDesc, const std::shared_ptr<Surface>& surface)
 {
-    return swapChains_.emplace<VKSwapChain>(instance_, physicalDevice_, device_, *deviceMemoryMngr_, swapChainDesc, surface);
+    return swapChains_.emplace<VKSwapChain>(instance_, physicalDevice_, device_, *deviceMemoryMngr_, swapChainDesc, surface, GetRendererInfo());
 }
 
 void VKRenderSystem::Release(SwapChain& swapChain)
@@ -253,6 +274,27 @@ void VKRenderSystem::UnmapBuffer(Buffer& buffer)
 
 /* ----- Textures ----- */
 
+// Tries to find an optimal initial VkImageLayout for the specified texture format and binding flags
+static VkImageLayout FindOptimalInitialVkImageLayout(Format format, long bindFlags)
+{
+    if ((bindFlags & BindFlags::CopyDst) != 0)
+        return VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+    if ((bindFlags & BindFlags::CopySrc) != 0)
+        return VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL;
+    if ((bindFlags & BindFlags::ColorAttachment) != 0)
+        return VK_IMAGE_LAYOUT_COLOR_ATTACHMENT_OPTIMAL;
+    if ((bindFlags & BindFlags::DepthStencilAttachment) != 0)
+    {
+        if (IsStencilFormat(format))
+            return VK_IMAGE_LAYOUT_STENCIL_ATTACHMENT_OPTIMAL;
+        else
+            return VK_IMAGE_LAYOUT_DEPTH_ATTACHMENT_OPTIMAL;
+    }
+    if ((bindFlags & BindFlags::Sampled) != 0)
+        return VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL;
+    return VK_IMAGE_LAYOUT_UNDEFINED;
+}
+
 Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, const ImageView* initialImage)
 {
     /* Determine size of image for staging buffer */
@@ -321,14 +363,13 @@ Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, con
         VKDeviceBuffer stagingBuffer = CreateStagingBufferAndInitialize(stagingCreateInfo, initialData, initialDataSize);
 
         /* Copy staging buffer into hardware texture, then transfer image into sampling-ready state */
-        VkCommandBuffer cmdBuffer = device_.AllocCommandBuffer();
+        VkCommandBuffer cmdBuffer = AllocCommandBuffer();
         {
             const TextureSubresource subresource{ 0, textureVK->GetNumArrayLayers(), 0, textureVK->GetNumMipLevels() };
 
-            textureVK->TransitionImageLayout(device_, cmdBuffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL);
+            textureVK->TransitionImageLayout(context_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, true);
 
-            device_.CopyBufferToImage(
-                cmdBuffer,
+            context_.CopyBufferToImage(
                 stagingBuffer.GetVkBuffer(),
                 textureVK->GetVkImage(),
                 textureVK->GetVkFormat(),
@@ -337,13 +378,12 @@ Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, con
                 subresource
             );
 
-            textureVK->TransitionImageLayout(device_, cmdBuffer, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL);
+            textureVK->TransitionImageLayout(context_, VK_IMAGE_LAYOUT_SHADER_READ_ONLY_OPTIMAL, true);
 
             /* Generate MIP-maps if enabled */
             if (initialImage != nullptr && MustGenerateMipsOnCreate(textureDesc))
             {
-                device_.GenerateMips(
-                    cmdBuffer,
+                context_.GenerateMips(
                     textureVK->GetVkImage(),
                     textureVK->GetVkFormat(),
                     textureVK->GetVkExtent(),
@@ -351,13 +391,26 @@ Texture* VKRenderSystem::CreateTexture(const TextureDescriptor& textureDesc, con
                 );
             }
         }
-        device_.FlushCommandBuffer(cmdBuffer);
+        FlushCommandBuffer(cmdBuffer);
 
         /* Release staging buffer */
         stagingBuffer.ReleaseMemoryRegion(*deviceMemoryMngr_);
     }
+    else
+    {
+        /* Initialize image layout */
+        const VkImageLayout initialLayout = FindOptimalInitialVkImageLayout(textureDesc.format, textureDesc.bindFlags);
+        if (initialLayout != VK_IMAGE_LAYOUT_UNDEFINED)
+        {
+            VkCommandBuffer cmdBuffer = AllocCommandBuffer();
+            {
+                textureVK->TransitionImageLayout(context_, initialLayout, true);
+            }
+            FlushCommandBuffer(cmdBuffer);
+        }
+    }
 
-    /* Create image view for texture */
+    /* Create primary image view for texture */
     textureVK->CreateInternalImageView(device_);
 
     return textureVK;
@@ -427,12 +480,11 @@ void VKRenderSystem::WriteTexture(Texture& texture, const TextureRegion& texture
     VKDeviceBuffer stagingBuffer = CreateStagingBufferAndInitialize(stagingCreateInfo, imageData, imageDataSize);
 
     /* Copy staging buffer into hardware texture, then transfer image into sampling-ready state */
-    VkCommandBuffer cmdBuffer = device_.AllocCommandBuffer();
+    VkCommandBuffer cmdBuffer = AllocCommandBuffer();
     {
-        VkImageLayout oldLayout = textureVK.TransitionImageLayout(device_, cmdBuffer, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource);
+        VkImageLayout oldLayout = textureVK.TransitionImageLayout(context_, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, subresource, true);
 
-        device_.CopyBufferToImage(
-            cmdBuffer,
+        context_.CopyBufferToImage(
             stagingBuffer.GetVkBuffer(),
             image,
             textureVK.GetVkFormat(),
@@ -441,9 +493,9 @@ void VKRenderSystem::WriteTexture(Texture& texture, const TextureRegion& texture
             subresource
         );
 
-        textureVK.TransitionImageLayout(device_, cmdBuffer, oldLayout, subresource);
+        textureVK.TransitionImageLayout(context_, oldLayout, subresource, true);
     }
-    device_.FlushCommandBuffer(cmdBuffer);
+    FlushCommandBuffer(cmdBuffer);
 
     /* Release staging buffer */
     stagingBuffer.ReleaseMemoryRegion(*deviceMemoryMngr_);
@@ -470,12 +522,11 @@ void VKRenderSystem::ReadTexture(Texture& texture, const TextureRegion& textureR
     VKDeviceBuffer stagingBuffer = CreateStagingBuffer(stagingCreateInfo);
 
     /* Copy staging buffer into hardware texture, then transfer image into sampling-ready state */
-    VkCommandBuffer cmdBuffer = device_.AllocCommandBuffer();
+    VkCommandBuffer cmdBuffer = AllocCommandBuffer();
     {
-        VkImageLayout oldLayout = textureVK.TransitionImageLayout(device_, cmdBuffer, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource);
+        VkImageLayout oldLayout = textureVK.TransitionImageLayout(context_, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, subresource, true);
 
-        device_.CopyImageToBuffer(
-            cmdBuffer,
+        context_.CopyImageToBuffer(
             image,
             stagingBuffer.GetVkBuffer(),
             textureVK.GetVkFormat(),
@@ -484,9 +535,9 @@ void VKRenderSystem::ReadTexture(Texture& texture, const TextureRegion& textureR
             subresource
         );
 
-        textureVK.TransitionImageLayout(device_, cmdBuffer, oldLayout, subresource);
+        textureVK.TransitionImageLayout(context_, oldLayout, subresource, true);
     }
-    device_.FlushCommandBuffer(cmdBuffer);
+    FlushCommandBuffer(cmdBuffer);
 
     /* Map staging buffer to CPU memory space */
     if (VKDeviceMemoryRegion* region = stagingBuffer.GetMemoryRegion())
@@ -597,7 +648,6 @@ void VKRenderSystem::Release(PipelineCache& pipelineCache)
     pipelineCaches_.erase(&pipelineCache);
 }
 
-
 /* ----- Pipeline States ----- */
 
 PipelineState* VKRenderSystem::CreatePipelineState(const GraphicsPipelineDescriptor& pipelineStateDesc, PipelineCache* pipelineCache)
@@ -606,7 +656,7 @@ PipelineState* VKRenderSystem::CreatePipelineState(const GraphicsPipelineDescrip
         device_,
         (!swapChains_.empty() ? (*swapChains_.begin())->GetRenderPass() : nullptr),
         pipelineStateDesc,
-        gfxPipelineLimits_,
+        graphicsPipelineLimits_,
         pipelineCache
     );
 }
@@ -655,12 +705,9 @@ bool VKRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
     if (nativeHandle != nullptr && nativeHandleSize == sizeof(Vulkan::RenderSystemNativeHandle))
     {
         auto* nativeHandleVK = reinterpret_cast<Vulkan::RenderSystemNativeHandle*>(nativeHandle);
-        nativeHandleVK->instance            = instance_.Get();
-        nativeHandleVK->physicalDevice      = physicalDevice_.GetVkPhysicalDevice();
-        nativeHandleVK->device              = device_.GetVkDevice();
-        nativeHandleVK->queue               = device_.GetVkQueue();
-        nativeHandleVK->queueGraphicsFamily = device_.GetQueueFamilyIndices().graphicsFamily;
-        nativeHandleVK->queuePresentFamily  = device_.GetQueueFamilyIndices().presentFamily;
+        nativeHandleVK->instance        = instance_.Get();
+        nativeHandleVK->physicalDevice  = physicalDevice_.GetVkPhysicalDevice();
+        nativeHandleVK->device          = device_.GetVkDevice();
         return true;
     }
     return false;
@@ -677,18 +724,23 @@ bool VKRenderSystem::GetNativeHandle(void* nativeHandle, std::size_t nativeHandl
 
 void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
 {
+    /* Determine supported Vulkan API version */
+    std::uint32_t instanceVersion = 0;
+    vkEnumerateInstanceVersion(&instanceVersion);
+    LLGL_ASSERT(instanceVersion >= VK_API_VERSION_1_0, "vkEnumerateInstanceVersion(instanceVersion = %u)", instanceVersion);
+
     /* Query instance layer properties */
-    auto layerProperties = VKQueryInstanceLayerProperties();
+    const std::vector<VkLayerProperties> layerProperties = VKQueryInstanceLayerProperties();
     std::vector<const char*> layerNames;
 
-    for (const auto& prop : layerProperties)
+    for (const VkLayerProperties& prop : layerProperties)
     {
         if (IsLayerRequired(prop.layerName, config))
             layerNames.push_back(prop.layerName);
     }
 
     /* Query instance extension properties */
-    auto extensionProperties = VKQueryInstanceExtensionProperties();
+    const std::vector<VkExtensionProperties> extensionProperties = VKQueryInstanceExtensionProperties();
     std::vector<const char*> extensionNames;
 
     auto IsVKExtSupportIncluded = [this](VKExtSupport extSupport)
@@ -701,73 +753,72 @@ void VKRenderSystem::CreateInstance(const RendererConfigurationVulkan* config)
         );
     };
 
-    for (const auto& prop : extensionProperties)
+    for (const VkExtensionProperties& prop : extensionProperties)
     {
-        const auto extSupport = GetVulkanInstanceExtensionSupport(prop.extensionName);
+        const VKExtSupport extSupport = GetVulkanInstanceExtensionSupport(prop.extensionName);
         if (IsVKExtSupportIncluded(extSupport))
             extensionNames.push_back(prop.extensionName);
     }
 
     /* Setup Vulkan instance descriptor */
-    VkInstanceCreateInfo instanceInfo;
-    VkApplicationInfo appInfo;
+    VkInstanceCreateInfo instanceInfo = {};
 
-    instanceInfo.sType                          = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
-    instanceInfo.pNext                          = nullptr;
-    instanceInfo.flags                          = 0;
+    instanceInfo.sType = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
 
     /* Specify application descriptor */
-    if (config != nullptr)
+    VkApplicationInfo appInfo = {};
     {
-        /* Initialize application information struct */
+        appInfo.sType       = VK_STRUCTURE_TYPE_APPLICATION_INFO;
+        appInfo.apiVersion  = instanceVersion;
+        if (config != nullptr)
         {
-            appInfo.sType                       = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-            appInfo.pNext                       = nullptr;
-            appInfo.pApplicationName            = config->application.applicationName;
-            appInfo.applicationVersion          = config->application.applicationVersion;
-            appInfo.pEngineName                 = config->application.engineName;
-            appInfo.engineVersion               = config->application.engineVersion;
-            appInfo.apiVersion                  = VK_API_VERSION_1_0;
+            appInfo.pApplicationName    = config->application.applicationName;
+            appInfo.applicationVersion  = config->application.applicationVersion;
+            appInfo.pEngineName         = config->application.engineName;
+            appInfo.engineVersion       = config->application.engineVersion;
         }
-        instanceInfo.pApplicationInfo           = (&appInfo);
     }
-    else
-        instanceInfo.pApplicationInfo           = nullptr;
+    instanceInfo.pApplicationInfo = (&appInfo);
 
     /* Specify layers to enable  */
-    if (layerNames.empty())
-    {
-        instanceInfo.enabledLayerCount          = 0;
-        instanceInfo.ppEnabledLayerNames        = nullptr;
-    }
-    else
+    if (!layerNames.empty())
     {
         instanceInfo.enabledLayerCount          = static_cast<std::uint32_t>(layerNames.size());
         instanceInfo.ppEnabledLayerNames        = layerNames.data();
     }
 
     /* Specify extensions to enable */
-    if (extensionNames.empty())
-    {
-        instanceInfo.enabledExtensionCount      = 0;
-        instanceInfo.ppEnabledExtensionNames    = nullptr;
-    }
-    else
+    if (!extensionNames.empty())
     {
         instanceInfo.enabledExtensionCount      = static_cast<std::uint32_t>(extensionNames.size());
         instanceInfo.ppEnabledExtensionNames    = extensionNames.data();
     }
 
+    #ifdef VK_EXT_validation_features
+
+    const VkValidationFeatureEnableEXT validationFeaturesEnabled[] =
+    {
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_EXT,
+        VK_VALIDATION_FEATURE_ENABLE_GPU_ASSISTED_RESERVE_BINDING_SLOT_EXT,
+        //VK_VALIDATION_FEATURE_ENABLE_BEST_PRACTICES_EXT,
+        //VK_VALIDATION_FEATURE_ENABLE_SYNCHRONIZATION_VALIDATION_EXT,
+    };
+    VkValidationFeaturesEXT validationFeatures = {};
+
+    /* Enable GPU-assisted validation if debug layer is enabled and Vulkan 1.1 or later is supported */
+    if (debugLayerEnabled_ && instanceVersion >= VK_API_VERSION_1_1)
+    {
+        validationFeatures.sType                            = VK_STRUCTURE_TYPE_VALIDATION_FEATURES_EXT;
+        validationFeatures.enabledValidationFeatureCount    = LLGL_ARRAY_LENGTH(validationFeaturesEnabled);
+        validationFeatures.pEnabledValidationFeatures       = validationFeaturesEnabled;
+        instanceInfo.pNext = &validationFeatures;
+    }
+
+    #endif // /VK_EXT_validation_features
+
     /* Create Vulkan instance */
     VkResult result = vkCreateInstance(&instanceInfo, nullptr, instance_.ReleaseAndGetAddressOf());
     VKThrowIfFailed(result, "failed to create Vulkan instance");
-
-    /* Create debug report callback */
-    if (debugLayerEnabled_)
-        CreateDebugReportCallback();
-
-    /* Load Vulkan instance extensions */
-    VKLoadInstanceExtensions(instance_);
 }
 
 static VKAPI_ATTR VkBool32 VKAPI_CALL VKDebugCallback(
@@ -832,30 +883,30 @@ void VKRenderSystem::CreateDebugReportCallback()
     VKThrowIfFailed(result, "failed to create Vulkan debug report callback");
 }
 
-void VKRenderSystem::PickPhysicalDevice()
+bool VKRenderSystem::PickPhysicalDevice(long preferredDeviceFlags, VkPhysicalDevice customPhysicalDevice)
 {
     /* Pick physical device with Vulkan support */
-    if (!physicalDevice_.PickPhysicalDevice(instance_))
-        throw std::runtime_error("failed to find suitable Vulkan device");
+    if (customPhysicalDevice != VK_NULL_HANDLE)
+    {
+        /* Load weak reference to custom native physical device */
+        physicalDevice_.LoadPhysicalDeviceWeakRef(customPhysicalDevice);
+    }
+    else if (!physicalDevice_.PickPhysicalDevice(instance_, preferredDeviceFlags))
+    {
+        GetMutableReport().Errorf("failed to find suitable Vulkan device");
+        return false;
+    }
 
-    /* Query and store rendering capabilities */
-    RendererInfo info;
-    RenderingCapabilities caps;
+    /* Store graphics pipeline limits for this physical device */
+    physicalDevice_.QueryPipelineLimits(graphicsPipelineLimits_);
 
-    physicalDevice_.QueryDeviceProperties(info, caps, gfxPipelineLimits_);
-
-    /* Store Vulkan extension names */
-    const auto& extensions = physicalDevice_.GetExtensionNames();
-    info.extensionNames = std::vector<std::string>(extensions.begin(), extensions.end());
-
-    SetRendererInfo(info);
-    SetRenderingCaps(caps);
+    return true;
 }
 
-void VKRenderSystem::CreateLogicalDevice()
+void VKRenderSystem::CreateLogicalDevice(VkDevice customLogicalDevice)
 {
     /* Create logical device with all supported physical device feature */
-    device_ = physicalDevice_.CreateLogicalDevice();
+    device_ = physicalDevice_.CreateLogicalDevice(customLogicalDevice);
 
     /* Create command queue interface */
     commandQueue_ = MakeUnique<VKCommandQueue>(device_, device_.GetVkQueue());
@@ -908,6 +959,35 @@ VKDeviceBuffer VKRenderSystem::CreateStagingBufferAndInitialize(
         device_.WriteBuffer(stagingBuffer, data, dataSize);
 
     return stagingBuffer;
+}
+
+VkCommandBuffer VKRenderSystem::AllocCommandBuffer(bool begin)
+{
+    VkCommandBuffer cmdBuffer = device_.AllocCommandBuffer(begin);
+    context_.Reset(cmdBuffer);
+    return cmdBuffer;
+}
+
+void VKRenderSystem::FlushCommandBuffer(VkCommandBuffer commandBuffer)
+{
+    device_.FlushCommandBuffer(commandBuffer);
+}
+
+bool VKRenderSystem::QueryRendererDetails(RendererInfo* outInfo, RenderingCapabilities* outCaps)
+{
+    if (outInfo != nullptr)
+    {
+        /* Query rendering information from selected physical device and store Vulkan extension names */
+        physicalDevice_.QueryRendererInfo(*outInfo);
+        const std::vector<const char*>& extensions = physicalDevice_.GetExtensionNames();
+        outInfo->extensionNames = std::vector<UTF8String>(extensions.begin(), extensions.end());
+    }
+    if (outCaps != nullptr)
+    {
+        /* Query rendering capabilities from selected physical device */
+        physicalDevice_.QueryRenderingCaps(*outCaps);
+    }
+    return true;
 }
 
 

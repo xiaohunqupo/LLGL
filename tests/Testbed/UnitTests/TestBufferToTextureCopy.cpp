@@ -9,6 +9,10 @@
 #include "Testset.h"
 
 
+/*
+Tests the CopyTextureFromBuffer() and CopyBufferFromTexture() functions starting from a buffer with various texture formats.
+There is no rendering. The values are only validated via ReadBuffer().
+*/
 DEF_TEST( BufferToTextureCopy )
 {
     const ArrayView<ColorRGBAub> colorsRgbaUb8 = Testset::GetColorsRgbaUb8();
@@ -135,10 +139,11 @@ DEF_TEST( BufferToTextureCopy )
                     );
                     return TestResult::FailedMismatch;
                 }
-                else if (sanityCheck)
+                else if (opt.sanityCheck)
                 {
                     const std::string dataStr = TestbedContext::FormatByteArray(srcData.data(), srcData.size(), 4, formatAsFloats);
-                    Log::Errorf(
+                    Log::Printf(
+                        Log::ColorFlags::StdAnnotation,
                         "Sanity check for %s [MIP %u, Layer %u]:\n"
                         " -> Data: [%s]\n",
                         name, mip, layer, dataStr.c_str()
@@ -155,7 +160,7 @@ DEF_TEST( BufferToTextureCopy )
         renderer->Release(*dstBuf);
 
         // Print duration
-        if (showTiming)
+        if (opt.showTiming)
         {
             const std::uint64_t t1 = Timer::Tick();
             Log::Printf("Copy buffer to texture: %s ( %f ms )\n", name, TestbedContext::ToMillisecs(t0, t1));

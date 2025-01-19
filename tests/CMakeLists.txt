@@ -5,7 +5,9 @@
 # Licensed under the terms of the BSD 3-Clause license (see LICENSE.txt).
 #
 
-cmake_minimum_required(VERSION 3.7)
+if (NOT DEFINED CMAKE_MINIMUM_REQUIRED_VERSION)
+    cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
+endif()
 
 project(LLGL_Tests)
 
@@ -16,7 +18,6 @@ find_project_source_files( FilesTest_Compute            "${TEST_PROJECTS_DIR}/Te
 find_project_source_files( FilesTest_D3D12              "${TEST_PROJECTS_DIR}/Test_D3D12.cpp"           )
 find_project_source_files( FilesTest_Display            "${TEST_PROJECTS_DIR}/Test_Display.cpp"         )
 find_project_source_files( FilesTest_Image              "${TEST_PROJECTS_DIR}/Test_Image.cpp"           )
-find_project_source_files( FilesTest_JIT                "${TEST_PROJECTS_DIR}/Test_JIT.cpp"             )
 find_project_source_files( FilesTest_Metal              "${TEST_PROJECTS_DIR}/Test_Metal.cpp"           )
 find_project_source_files( FilesTest_OpenGL             "${TEST_PROJECTS_DIR}/Test_OpenGL.cpp"          )
 find_project_source_files( FilesTest_Performance        "${TEST_PROJECTS_DIR}/Test_Performance.cpp"     )
@@ -28,7 +29,7 @@ find_project_source_files( FilesTest_Window             "${TEST_PROJECTS_DIR}/Te
 
 # === Include directories ===
 
-include_directories("${EXAMPLEBASE_PROJECT_DIR}")
+include_directories("${EXAMPLE_CPP_PROJECTS_DIR}/ExampleBase")
 include_directories("${EXTERNAL_INCLUDE_DIR}") # <stb/stb_image.h>
 
 if(GaussLib_INCLUDE_DIR)
@@ -44,12 +45,13 @@ endif()
 if(LLGL_BUILD_TESTS)
     # Platform specific test projects
     add_llgl_example_project(Test_OpenGL CXX "${FilesTest_OpenGL}" "${LLGL_MODULE_LIBS}")
-    if(WIN32)
+    if(LLGL_BUILD_RENDERER_DIRECT3D12 AND WIN32)
         add_llgl_example_project(Test_D3D12 CXX "${FilesTest_D3D12}" "${LLGL_MODULE_LIBS}")
     endif()
-    if(APPLE)
+    if(LLGL_BUILD_RENDERER_METAL AND APPLE)
         add_llgl_example_project(Test_Metal CXX "${FilesTest_Metal}" "${LLGL_MODULE_LIBS}")
-    elseif(LLGL_BUILD_RENDERER_VULKAN)
+    endif()
+    if(LLGL_BUILD_RENDERER_VULKAN AND NOT APPLE)
         add_llgl_example_project(Test_Vulkan CXX "${FilesTest_Vulkan}" "${LLGL_MODULE_LIBS}")
     endif()
     
@@ -57,7 +59,6 @@ if(LLGL_BUILD_TESTS)
     add_llgl_example_project(Test_Compute           CXX "${FilesTest_Compute}"          "${LLGL_MODULE_LIBS}")
     add_llgl_example_project(Test_Display           CXX "${FilesTest_Display}"          "${LLGL_MODULE_LIBS}")
     add_llgl_example_project(Test_Image             CXX "${FilesTest_Image}"            "${LLGL_MODULE_LIBS}")
-    add_llgl_example_project(Test_JIT               CXX "${FilesTest_JIT}"              "${LLGL_MODULE_LIBS}")
     add_llgl_example_project(Test_Performance       CXX "${FilesTest_Performance}"      "${LLGL_MODULE_LIBS}")
     add_llgl_example_project(Test_SeparateShaders   CXX "${FilesTest_SeparateShaders}"  "${LLGL_MODULE_LIBS}")
     add_llgl_example_project(Test_ShaderReflect     CXX "${FilesTest_ShaderReflect}"    "${LLGL_MODULE_LIBS}")

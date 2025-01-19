@@ -15,20 +15,19 @@ NullPipelineState::NullPipelineState(const GraphicsPipelineDescriptor& desc) :
     isGraphicsPSO { true },
     graphicsDesc  { desc }
 {
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
 NullPipelineState::NullPipelineState(const ComputePipelineDescriptor& desc) :
     isGraphicsPSO { false },
     computeDesc   { desc  }
 {
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
-NullPipelineState::~NullPipelineState()
-{
-    // dummy
-}
-
-void NullPipelineState::SetName(const char* name)
+void NullPipelineState::SetDebugName(const char* name)
 {
     if (name != nullptr)
         label_ = name;

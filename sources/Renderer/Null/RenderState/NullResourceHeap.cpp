@@ -20,18 +20,22 @@ namespace LLGL
 static std::uint32_t GetNumPipelineLayoutBindings(const PipelineLayout* pipelineLayout)
 {
     auto pipelineLayoutNull = LLGL_CAST(const NullPipelineLayout*, pipelineLayout);
-    return std::max(1u, static_cast<std::uint32_t>(pipelineLayoutNull->desc.bindings.size()));
+    return std::max(1u, static_cast<std::uint32_t>(pipelineLayoutNull->desc.heapBindings.size()));
 }
 
 NullResourceHeap::NullResourceHeap(const ResourceHeapDescriptor& desc, const ArrayView<ResourceViewDescriptor>& initialResourceViews) :
     numBindings_   { GetNumPipelineLayoutBindings(desc.pipelineLayout)        },
     resourceViews_ { initialResourceViews.begin(), initialResourceViews.end() }
 {
-    const auto numResourceViews = GetNumResourceViewsOrThrow(numBindings_, desc, initialResourceViews);
+    const std::uint32_t numResourceViews = GetNumResourceViewsOrThrow(numBindings_, desc, initialResourceViews);
     if (numResourceViews > 0)
         resourceViews_.resize(numResourceViews);
+
     if (!initialResourceViews.empty())
         WriteResourceViews(0, initialResourceViews);
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
 std::uint32_t NullResourceHeap::WriteResourceViews(std::uint32_t firstDescriptor, const ArrayView<ResourceViewDescriptor>& resourceViews)
@@ -53,7 +57,7 @@ std::uint32_t NullResourceHeap::WriteResourceViews(std::uint32_t firstDescriptor
     return numWritten;
 }
 
-void NullResourceHeap::SetName(const char* name)
+void NullResourceHeap::SetDebugName(const char* name)
 {
     if (name != nullptr)
         label_ = name;

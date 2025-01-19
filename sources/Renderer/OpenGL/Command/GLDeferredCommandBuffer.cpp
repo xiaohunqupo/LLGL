@@ -8,6 +8,7 @@
 #include "GLDeferredCommandBuffer.h"
 #include "GLCommand.h"
 #include <LLGL/Constants.h>
+#include <LLGL/TypeInfo.h>
 
 #include "../../TextureUtils.h"
 #include "../GLSwapChain.h"
@@ -22,12 +23,11 @@
 
 #include "../Texture/GLTexture.h"
 #include "../Texture/GLSampler.h"
+#include "../Texture/GLEmulatedSampler.h"
 #include "../Texture/GLRenderTarget.h"
-#ifdef LLGL_GL_ENABLE_OPENGL2X
-#   include "../Texture/GL2XSampler.h"
-#endif
 
 #include "../Buffer/GLBufferWithVAO.h"
+#include "../Buffer/GLBufferWithXFB.h"
 #include "../Buffer/GLBufferArrayWithVAO.h"
 
 #include "../RenderState/GLStateManager.h"
@@ -39,10 +39,6 @@
 #include <algorithm>
 #include <string.h>
 #include <cstring> // std::strlen
-
-#ifdef LLGL_ENABLE_JIT_COMPILER
-#   include "GLCommandAssembler.h"
-#endif // /LLGL_ENABLE_JIT_COMPILER
 
 
 namespace LLGL
@@ -62,40 +58,21 @@ void GLDeferredCommandBuffer::Begin()
     /* Reset internal command buffer */
     buffer_.Clear();
     ResetRenderState();
-
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-
-    /* Reset states relevant to the GL command assembler */
-    executable_.reset();
-    maxNumViewports_ = 0;
-    maxNumScissors_  = 0;
-
-    #endif // /LLGL_ENABLE_JIT_COMPILER
 }
 
 void GLDeferredCommandBuffer::End()
 {
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-
-    /* Generate native assembly only if command buffer will be submitted multiple times */
-    if ((GetFlags() & CommandBufferFlags::MultiSubmit) != 0)
-        executable_ = AssembleGLDeferredCommandBuffer(*this);
-
-    #else
-
     /* Pack virtual command buffer if it has to be traversed multiple times */
     if ((GetFlags() & CommandBufferFlags::MultiSubmit) != 0)
         buffer_.Pack();
-
-    #endif // /LLGL_ENABLE_JIT_COMPILER
 }
 
-void GLDeferredCommandBuffer::Execute(CommandBuffer& deferredCommandBuffer)
+void GLDeferredCommandBuffer::Execute(CommandBuffer& secondaryCommandBuffer)
 {
     if (IsPrimary())
     {
         /* Is this a secondary command buffer? */
-        auto& cmdBufferGL = LLGL_CAST(const GLCommandBuffer&, deferredCommandBuffer);
+        auto& cmdBufferGL = LLGL_CAST(const GLCommandBuffer&, secondaryCommandBuffer);
         if (!cmdBufferGL.IsImmediateCmdBuffer())
         {
             auto& deferredCmdBufferGL = LLGL_CAST(const GLDeferredCommandBuffer&, cmdBufferGL);
@@ -273,10 +250,6 @@ void GLDeferredCommandBuffer::GenerateMips(Texture& texture, const TextureSubres
 
 void GLDeferredCommandBuffer::SetViewport(const Viewport& viewport)
 {
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-    maxNumViewports_ = std::max(maxNumViewports_, 1u);
-    #endif // /LLGL_ENABLE_JIT_COMPILER
-
     auto cmd = AllocCommand<GLCmdViewport>(GLOpcodeViewport);
     {
         cmd->viewport   = GLViewport{ viewport.x, viewport.y, viewport.width, viewport.height };
@@ -288,10 +261,6 @@ void GLDeferredCommandBuffer::SetViewports(std::uint32_t numViewports, const Vie
 {
     /* Clamp number of viewports to limit */
     numViewports = std::min(numViewports, LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS);
-
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-    maxNumViewports_ = std::max(maxNumViewports_, numViewports);
-    #endif // /LLGL_ENABLE_JIT_COMPILER
 
     /* Encode GL command */
     auto cmd = AllocCommand<GLCmdViewportArray>(GLOpcodeViewportArray, (sizeof(GLViewport) + sizeof(GLDepthRange))*numViewports);
@@ -319,10 +288,6 @@ void GLDeferredCommandBuffer::SetViewports(std::uint32_t numViewports, const Vie
 
 void GLDeferredCommandBuffer::SetScissor(const Scissor& scissor)
 {
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-    maxNumScissors_ = std::max(maxNumScissors_, 1u);
-    #endif // /LLGL_ENABLE_JIT_COMPILER
-
     auto cmd = AllocCommand<GLCmdScissor>(GLOpcodeScissor);
     cmd->scissor = GLScissor{ scissor.x, scissor.y, scissor.width, scissor.height };
 }
@@ -331,10 +296,6 @@ void GLDeferredCommandBuffer::SetScissors(std::uint32_t numScissors, const Sciss
 {
     /* Clamp number of scissors to limit */
     numScissors = std::min(numScissors, LLGL_MAX_NUM_VIEWPORTS_AND_SCISSORS);
-
-    #ifdef LLGL_ENABLE_JIT_COMPILER
-    maxNumScissors_ = std::max(maxNumScissors_, numScissors);
-    #endif // /LLGL_ENABLE_JIT_COMPILER
 
     /* Encode GL command */
     auto cmd = AllocCommand<GLCmdScissorArray>(GLOpcodeScissorArray, sizeof(GLScissor)*numScissors);
@@ -359,19 +320,18 @@ void GLDeferredCommandBuffer::SetVertexBuffer(Buffer& buffer)
 {
     if ((buffer.GetBindFlags() & BindFlags::VertexBuffer) != 0)
     {
-        auto& bufferWithVAO = LLGL_CAST(const GLBufferWithVAO&, buffer);
-        #ifdef LLGL_GL_ENABLE_OPENGL2X
-        if (!HasNativeVAO())
+        auto& bufferWithVAO = LLGL_CAST(GLBufferWithVAO&, buffer);
+        auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
+        cmd->vertexArray = bufferWithVAO.GetVertexArray();
+        
+        #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
+        /* Store ID to transform feedback object */
+        if ((buffer.GetBindFlags() & BindFlags::StreamOutputBuffer) != 0)
         {
-            auto cmd = AllocCommand<GLCmdBindGL2XVertexArray>(GLOpcodeBindGL2XVertexArray);
-            cmd->vertexArrayGL2X = &(bufferWithVAO.GetVertexArrayGL2X());
+            auto& streamOutputBufferGL = LLGL_CAST(GLBufferWithXFB&, bufferWithVAO);
+            SetTransformFeedback(streamOutputBufferGL);
         }
-        else
-        #endif // /LLGL_GL_ENABLE_OPENGL2X
-        {
-            auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
-            cmd->vao = bufferWithVAO.GetVaoID();
-        }
+        #endif // /LLGL_GLEXT_TRNASFORM_FEEDBACK2
     }
 }
 
@@ -379,19 +339,9 @@ void GLDeferredCommandBuffer::SetVertexBufferArray(BufferArray& bufferArray)
 {
     if ((bufferArray.GetBindFlags() & BindFlags::VertexBuffer) != 0)
     {
-        auto& bufferArrayWithVAO = LLGL_CAST(const GLBufferArrayWithVAO&, bufferArray);
-        #ifdef LLGL_GL_ENABLE_OPENGL2X
-        if (!HasNativeVAO())
-        {
-            auto cmd = AllocCommand<GLCmdBindGL2XVertexArray>(GLOpcodeBindGL2XVertexArray);
-            cmd->vertexArrayGL2X = &(bufferArrayWithVAO.GetVertexArrayGL2X());
-        }
-        else
-        #endif
-        {
-            auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
-            cmd->vao = bufferArrayWithVAO.GetVaoID();
-        }
+        auto& bufferArrayWithVAO = LLGL_CAST(GLBufferArrayWithVAO&, bufferArray);
+        auto cmd = AllocCommand<GLCmdBindVertexArray>(GLOpcodeBindVertexArray);
+        cmd->vertexArray = bufferArrayWithVAO.GetVertexArray();
     }
 }
 
@@ -419,8 +369,14 @@ void GLDeferredCommandBuffer::SetIndexBuffer(Buffer& buffer, const Format format
 void GLDeferredCommandBuffer::SetResourceHeap(ResourceHeap& resourceHeap, std::uint32_t descriptorSet)
 {
     auto cmd = AllocCommand<GLCmdBindResourceHeap>(GLOpcodeBindResourceHeap);
-    cmd->resourceHeap   = LLGL_CAST(GLResourceHeap*, &resourceHeap);
-    cmd->descriptorSet  = descriptorSet;
+    {
+        cmd->resourceHeap       = LLGL_CAST(GLResourceHeap*, &resourceHeap);
+        cmd->descriptorSet      = descriptorSet;
+        cmd->bufferInterfaceMap = GetBoundPipelineState()->GetBufferInterfaceMap();
+    }
+    #if LLGL_GLEXT_MEMORY_BARRIERS
+    InvalidateMemoryBarriers(GL_SHADER_STORAGE_BARRIER_BIT | GL_SHADER_IMAGE_ACCESS_BARRIER_BIT); //TODO: find optimal bitmask from resource heap
+    #endif
 }
 
 void GLDeferredCommandBuffer::SetResource(std::uint32_t descriptor, Resource& resource)
@@ -433,107 +389,152 @@ void GLDeferredCommandBuffer::SetResource(std::uint32_t descriptor, Resource& re
     if (!(descriptor < bindingList.size()))
         return /*GL_INVALID_INDEX*/;
 
-    const auto& binding = bindingList[descriptor];
-    switch (binding.type)
+    const GLPipelineResourceBinding& binding = bindingList[descriptor];
+    if (binding.combiners > 0)
+    {
+        /* Bind resource at one or more slots for combined texture-samplers */
+        const std::vector<GLuint>& combinedSamplerSlots = pipelineLayoutGL->GetCombinedSamplerSlots();
+        BindCombinedResource(binding.type, &(combinedSamplerSlots[binding.slot]), binding.combiners, resource);
+    }
+    else
+    {
+        /* Bind resource at explicit binding slot */
+        BindResource(binding.type, binding.slot, binding.ssboIndex, resource);
+    }
+}
+
+// private
+void GLDeferredCommandBuffer::BindResource(GLResourceType type, GLuint slot, std::uint32_t descriptor, Resource& resource)
+{
+    switch (type)
     {
         case GLResourceType_Invalid:
+        case GLResourceType_End:
+        {
+            // ignore
+        }
         break;
 
         case GLResourceType_UBO:
         {
             auto& bufferGL = LLGL_CAST(GLBuffer&, resource);
-            BindBufferBase(GLBufferTarget::UniformBuffer, bufferGL, binding.slot);
+            BindBufferBase(GLBufferTarget::UniformBuffer, bufferGL, slot);
         }
         break;
 
-        case GLResourceType_SSBO:
+        case GLResourceType_Buffer:
         {
             auto& bufferGL = LLGL_CAST(GLBuffer&, resource);
-            BindBufferBase(GLBufferTarget::ShaderStorageBuffer, bufferGL, binding.slot);
+
+            /* Lookup whether this is an SSBO, sampler buffer, or image buffer in buffer interface map */
+            const GLShaderBufferInterfaceMap* bufferInterfaceMap = GetBoundPipelineState()->GetBufferInterfaceMap();
+            GLBufferInterface bufferInterface = bufferInterfaceMap->GetDynamicInterfaces()[descriptor];
+            switch (bufferInterface)
+            {
+                case GLBufferInterface_SSBO:
+                {
+                    BindBufferBase(GLBufferTarget::ShaderStorageBuffer, bufferGL, slot);
+                    #if LLGL_GLEXT_MEMORY_BARRIERS
+                    InvalidateMemoryBarriersForStorageResource(bufferGL.GetBindFlags(), GL_SHADER_STORAGE_BARRIER_BIT);
+                    #endif
+                }
+                break;
+
+                case GLBufferInterface_Sampler:
+                {
+                    BindTextureNative(bufferGL.GetTexID(), GLTextureTarget::TextureBuffer, slot);
+                    #if LLGL_GLEXT_MEMORY_BARRIERS
+                    InvalidateMemoryBarriersForStorageResource(bufferGL.GetBindFlags(), GL_TEXTURE_FETCH_BARRIER_BIT);
+                    #endif
+                }
+                break;
+
+                case GLBufferInterface_Image:
+                {
+                    BindImageTexture(bufferGL.GetTexID(), bufferGL.GetTexGLInternalFormat(), slot);
+                    #if LLGL_GLEXT_MEMORY_BARRIERS
+                    InvalidateMemoryBarriersForStorageResource(bufferGL.GetBindFlags(), GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                    #endif
+                }
+                break;
+            }
         }
         break;
 
         case GLResourceType_Texture:
         {
             auto& textureGL = LLGL_CAST(GLTexture&, resource);
-            BindTexture(textureGL, binding.slot);
+            BindTexture(textureGL, slot);
+            #if LLGL_GLEXT_MEMORY_BARRIERS
+            InvalidateMemoryBarriersForStorageResource(textureGL.GetBindFlags(), GL_TEXTURE_FETCH_BARRIER_BIT);
+            #endif
         }
         break;
 
         case GLResourceType_Image:
         {
             auto& textureGL = LLGL_CAST(GLTexture&, resource);
-            BindImageTexture(textureGL, binding.slot);
+            BindImageTexture(textureGL.GetID(), textureGL.GetGLInternalFormat(), slot);
+            #if LLGL_GLEXT_MEMORY_BARRIERS
+            InvalidateMemoryBarriersForStorageResource(textureGL.GetBindFlags(), GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            #endif
         }
         break;
 
         case GLResourceType_Sampler:
         {
             auto& samplerGL = LLGL_CAST(GLSampler&, resource);
-            BindSampler(samplerGL, binding.slot);
+            BindSampler(samplerGL, slot);
         }
         break;
 
-        case GLResourceType_GL2XSampler:
+        case GLResourceType_EmulatedSampler:
         {
-            #ifdef LLGL_GL_ENABLE_OPENGL2X
-            auto& samplerGL2X = LLGL_CAST(GL2XSampler&, resource);
-            BindGL2XSampler(samplerGL2X, binding.slot);
-            #endif // /LLGL_GL_ENABLE_OPENGL2X
+            auto& emulatedSamplerGL = LLGL_CAST(GLEmulatedSampler&, resource);
+            BindEmulatedSampler(emulatedSamplerGL, slot);
         }
         break;
     }
 }
 
-void GLDeferredCommandBuffer::ResetResourceSlots(
-    const ResourceType  resourceType,
-    std::uint32_t       firstSlot,
-    std::uint32_t       numSlots,
-    long                bindFlags,
-    long                /*stageFlags*/)
+// private
+void GLDeferredCommandBuffer::BindCombinedResource(GLResourceType type, const GLuint* slots, std::uint32_t numSlots, Resource& resource)
 {
-    GLCmdUnbindResources cmd;
-
-    cmd.first       = static_cast<GLuint>(std::min(firstSlot, GLStateManager::g_maxNumResourceSlots - 1u));
-    cmd.count       = static_cast<GLsizei>(std::min(numSlots, GLStateManager::g_maxNumResourceSlots - cmd.first));
-    cmd.resetFlags  = 0;
-
-    if (cmd.count > 0)
+    switch (type)
     {
-        switch (resourceType)
+        case GLResourceType_Texture:
         {
-            case ResourceType::Undefined:
-            break;
-
-            case ResourceType::Buffer:
-            {
-                if ((bindFlags & BindFlags::ConstantBuffer) != 0)
-                    cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::UBO;
-                if ((bindFlags & (BindFlags::Sampled | BindFlags::Storage)) != 0)
-                    cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::SSBO;
-                if ((bindFlags & BindFlags::StreamOutputBuffer) != 0)
-                    cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::TransformFeedback;
-            }
-            break;
-
-            case ResourceType::Texture:
-            {
-                if ((bindFlags & BindFlags::Sampled) != 0)
-                    cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::Textures;
-                if ((bindFlags & BindFlags::Storage) != 0)
-                    cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::Images;
-            }
-            break;
-
-            case ResourceType::Sampler:
-            {
-                cmd.resetFlags |= GLCmdUnbindResources::ResetFlags::Samplers;
-            }
-            break;
+            auto& textureGL = LLGL_CAST(GLTexture&, resource);
+            for_range(i, numSlots)
+                BindTexture(textureGL, slots[i]);
+            #if LLGL_GLEXT_MEMORY_BARRIERS
+            if ((textureGL.GetBindFlags() & BindFlags::Storage) != 0)
+                InvalidateMemoryBarriers(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+            #endif
         }
+        break;
 
-        if (cmd.resetFlags != 0)
-            *AllocCommand<GLCmdUnbindResources>(GLOpcodeUnbindResources) = cmd;
+        case GLResourceType_Sampler:
+        {
+            auto& samplerGL = LLGL_CAST(GLSampler&, resource);
+            for_range(i, numSlots)
+                BindSampler(samplerGL, slots[i]);
+        }
+        break;
+
+        case GLResourceType_EmulatedSampler:
+        {
+            auto& emulatedSamplerGL = LLGL_CAST(GLEmulatedSampler&, resource);
+            for_range(i, numSlots)
+                BindEmulatedSampler(emulatedSamplerGL, slots[i]);
+        }
+        break;
+
+        default:
+        {
+            // dummy - combined resource bindings are only available to textures and samplers
+        }
+        break;
     }
 }
 
@@ -559,11 +560,30 @@ void GLDeferredCommandBuffer::BeginRenderPass(
             ::memcpy(cmd + 1, clearValues, sizeof(ClearValue)*numClearValues);
         }
     }
+
+    /*
+    Cache render target if it needs to be resolved at the following EndRenderPass() call.
+    This is one of the few states the deferred GL command buffer caches
+    as it must be guaranteed that this render pass is followed by a call to EndRenderPass() operating on the same render-target.
+    */
+    if (!LLGL::IsInstanceOf<SwapChain>(renderTarget))
+    {
+        auto& renderTargetGL = LLGL_CAST(GLRenderTarget&, renderTarget);
+        if (renderTargetGL.CanResolveMultisampledFBO())
+            renderTargetToResolve_ = &renderTargetGL;
+    }
 }
 
 void GLDeferredCommandBuffer::EndRenderPass()
 {
-    // dummy
+    if (renderTargetToResolve_ != nullptr)
+    {
+        auto cmd = AllocCommand<GLCmdResolveRenderTarget>(GLOpcodeResolveRenderTarget);
+        {
+            cmd->renderTarget = renderTargetToResolve_;
+        }
+        renderTargetToResolve_ = nullptr;
+    }
 }
 
 void GLDeferredCommandBuffer::Clear(long flags, const ClearValue& clearValue)
@@ -659,7 +679,7 @@ void GLDeferredCommandBuffer::SetUniforms(std::uint32_t first, const void* data,
         /* Allocate GL command and copy data buffer */
         const auto& uniform = uniformMap[first];
         const std::uint32_t uniformSize = uniform.wordSize * 4;
-        auto cmd = AllocCommand<GLCmdSetUniforms>(GLOpcodeSetUniforms, dataSize);
+        auto cmd = AllocCommand<GLCmdSetUniform>(GLOpcodeSetUniform, uniformSize);
         {
             cmd->program    = boundShaderPipeline->GetID(); //TODO: must distinguish between GLShaderProgram and GLProgramPipeline
             cmd->type       = uniform.type;
@@ -718,6 +738,15 @@ void GLDeferredCommandBuffer::BeginStreamOutput(std::uint32_t numBuffers, Buffer
 {
     /* Bind transform feedback buffers */
     numBuffers = std::min(numBuffers, LLGL_MAX_NUM_SO_BUFFERS);
+
+    if (numBuffers > 0)
+    {
+        auto* bufferWithXfbGL = LLGL_CAST(GLBufferWithXFB*, buffers[0]);
+        auto cmd = AllocCommand<GLCmdBeginBufferXfb>(GLOpcodeBeginBufferXfb);
+        cmd->bufferWithXfb = bufferWithXfbGL;
+        cmd->primitiveMode = GetPrimitiveMode();
+    }
+
     BindBuffersBase(GLBufferTarget::TransformFeedbackBuffer, 0, numBuffers, buffers);
 
     /* Begin transform feedback section */
@@ -752,6 +781,7 @@ void GLDeferredCommandBuffer::EndStreamOutput()
     else
         LLGL_TRAP_TRANSFORM_FEEDBACK_NOT_SUPPORTED();
     #endif
+    AllocOpcode(GLOpcodeEndBufferXfb);
 }
 
 /* ----- Drawing ----- */
@@ -762,8 +792,16 @@ In the following Draw* functions, 'indices' is from type <GLintptr> to have the 
 The indices actually store the index start offset, but must be passed to GL as a void-pointer, due to an obsolete API.
 */
 
+#if LLGL_GLEXT_MEMORY_BARRIERS
+#   define LLGL_FLUSH_MEMORY_BARRIERS() \
+        FlushMemoryBarriers()
+#else
+#   define LLGL_FLUSH_MEMORY_BARRIERS()
+#endif // /LLGL_GLEXT_MEMORY_BARRIERS
+
 void GLDeferredCommandBuffer::Draw(std::uint32_t numVertices, std::uint32_t firstVertex)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawArrays>(GLOpcodeDrawArrays);
     {
         cmd->mode   = GetDrawMode();
@@ -774,6 +812,7 @@ void GLDeferredCommandBuffer::Draw(std::uint32_t numVertices, std::uint32_t firs
 
 void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_t firstIndex)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElements>(GLOpcodeDrawElements);
     {
         cmd->mode       = GetDrawMode();
@@ -785,6 +824,7 @@ void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_
 
 void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_t firstIndex, std::int32_t vertexOffset)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElementsBaseVertex>(GLOpcodeDrawElementsBaseVertex);
     {
         cmd->mode       = GetDrawMode();
@@ -797,6 +837,7 @@ void GLDeferredCommandBuffer::DrawIndexed(std::uint32_t numIndices, std::uint32_
 
 void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawArraysInstanced>(GLOpcodeDrawArraysInstanced);
     {
         cmd->mode           = GetDrawMode();
@@ -809,6 +850,7 @@ void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint
 void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint32_t firstVertex, std::uint32_t numInstances, std::uint32_t firstInstance)
 {
     #ifndef __APPLE__
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawArraysInstancedBaseInstance>(GLOpcodeDrawArraysInstancedBaseInstance);
     {
         cmd->mode           = GetDrawMode();
@@ -824,6 +866,7 @@ void GLDeferredCommandBuffer::DrawInstanced(std::uint32_t numVertices, std::uint
 
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElementsInstanced>(GLOpcodeDrawElementsInstanced);
     {
         cmd->mode           = GetDrawMode();
@@ -836,6 +879,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex, std::int32_t vertexOffset)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElementsInstancedBaseVertex>(GLOpcodeDrawElementsInstancedBaseVertex);
     {
         cmd->mode           = GetDrawMode();
@@ -850,6 +894,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std::uint32_t numInstances, std::uint32_t firstIndex, std::int32_t vertexOffset, std::uint32_t firstInstance)
 {
     #ifndef __APPLE__
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElementsInstancedBaseVertexBaseInstance>(GLOpcodeDrawElementsInstancedBaseVertexBaseInstance);
     {
         cmd->mode           = GetDrawMode();
@@ -867,6 +912,7 @@ void GLDeferredCommandBuffer::DrawIndexedInstanced(std::uint32_t numIndices, std
 
 void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawArraysIndirect>(GLOpcodeDrawArraysIndirect);
     {
         cmd->id             = LLGL_CAST(GLBuffer&, buffer).GetID();
@@ -879,6 +925,7 @@ void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset)
 
 void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset, std::uint32_t numCommands, std::uint32_t stride)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     #ifndef __APPLE__
     if (HasExtension(GLExt::ARB_multi_draw_indirect))
     {
@@ -908,6 +955,7 @@ void GLDeferredCommandBuffer::DrawIndirect(Buffer& buffer, std::uint64_t offset,
 
 void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t offset)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDrawElementsIndirect>(GLOpcodeDrawElementsIndirect);
     {
         cmd->id             = LLGL_CAST(GLBuffer&, buffer).GetID();
@@ -921,6 +969,7 @@ void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t 
 
 void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t offset, std::uint32_t numCommands, std::uint32_t stride)
 {
+    LLGL_FLUSH_MEMORY_BARRIERS();
     #ifndef __APPLE__
     if (HasExtension(GLExt::ARB_multi_draw_indirect))
     {
@@ -950,11 +999,38 @@ void GLDeferredCommandBuffer::DrawIndexedIndirect(Buffer& buffer, std::uint64_t 
     }
 }
 
+void GLDeferredCommandBuffer::DrawStreamOutput()
+{
+    LLGL_FLUSH_MEMORY_BARRIERS();
+    if (GLBufferWithXFB* bufferWithXfbGL = GetRenderState().boundBufferWithFxb)
+    {
+        #if LLGL_GLEXT_TRNASFORM_FEEDBACK2
+        if (HasExtension(GLExt::ARB_transform_feedback2))
+        {
+            auto cmd = AllocCommand<GLCmdDrawTransformFeedback>(GLOpcodeDrawTransformFeedback);
+            {
+                cmd->mode   = GetDrawMode();
+                cmd->xfbID  = bufferWithXfbGL->GetTransformFeedbackID();
+            }
+        }
+        else
+        #endif // /LLGL_GLEXT_TRNASFORM_FEEDBACK2
+        {
+            auto cmd = AllocCommand<GLCmdDrawEmulatedTransformFeedback>(GLOpcodeDrawEmulatedTransformFeedback);
+            {
+                cmd->mode           = GetDrawMode();
+                cmd->bufferWithXfb  = bufferWithXfbGL;
+            }
+        }
+    }
+}
+
 /* ----- Compute ----- */
 
 void GLDeferredCommandBuffer::Dispatch(std::uint32_t numWorkGroupsX, std::uint32_t numWorkGroupsY, std::uint32_t numWorkGroupsZ)
 {
     #ifndef __APPLE__
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDispatchCompute>(GLOpcodeDispatchCompute);
     {
         cmd->numgroups[0] = numWorkGroupsX;
@@ -969,6 +1045,7 @@ void GLDeferredCommandBuffer::Dispatch(std::uint32_t numWorkGroupsX, std::uint32
 void GLDeferredCommandBuffer::DispatchIndirect(Buffer& buffer, std::uint64_t offset)
 {
     #ifndef __APPLE__
+    LLGL_FLUSH_MEMORY_BARRIERS();
     auto cmd = AllocCommand<GLCmdDispatchComputeIndirect>(GLOpcodeDispatchComputeIndirect);
     {
         cmd->id         = LLGL_CAST(const GLBuffer&, buffer).GetID();
@@ -983,7 +1060,7 @@ void GLDeferredCommandBuffer::DispatchIndirect(Buffer& buffer, std::uint64_t off
 
 void GLDeferredCommandBuffer::PushDebugGroup(const char* name)
 {
-    #ifdef GL_KHR_debug
+    #if LLGL_GLEXT_DEBUG
     if (HasExtension(GLExt::KHR_debug))
     {
         /* Push debug group name into command stream with default ID no. */
@@ -1000,15 +1077,15 @@ void GLDeferredCommandBuffer::PushDebugGroup(const char* name)
             ::memcpy(cmd + 1, name, croppedLength + 1);
         }
     }
-    #endif // /GL_KHR_debug
+    #endif // /LLGL_GLEXT_DEBUG
 }
 
 void GLDeferredCommandBuffer::PopDebugGroup()
 {
-    #ifdef GL_KHR_debug
+    #if LLGL_GLEXT_DEBUG
     if (HasExtension(GLExt::KHR_debug))
         AllocOpcode(GLOpcodePopDebugGroup);
-    #endif // /GL_KHR_debug
+    #endif // /LLGL_GLEXT_DEBUG
 }
 
 /* ----- Extensions ----- */
@@ -1083,14 +1160,24 @@ void GLDeferredCommandBuffer::BindTexture(GLTexture& textureGL, std::uint32_t sl
     }
 }
 
-void GLDeferredCommandBuffer::BindImageTexture(const GLTexture& textureGL, std::uint32_t slot)
+void GLDeferredCommandBuffer::BindTextureNative(GLuint texID, GLTextureTarget target, std::uint32_t slot)
+{
+    auto cmd = AllocCommand<GLCmdBindTextureNative>(GLOpcodeBindTextureNative);
+    {
+        cmd->slot       = slot;
+        cmd->id         = texID;
+        cmd->target     = target;
+    }
+}
+
+void GLDeferredCommandBuffer::BindImageTexture(GLuint texID, GLenum internalFormat, std::uint32_t slot)
 {
     auto cmd = AllocCommand<GLCmdBindImageTexture>(GLOpcodeBindImageTexture);
     {
         cmd->unit       = slot;
         cmd->level      = 0;
-        cmd->format     = textureGL.GetGLInternalFormat();
-        cmd->texture    = textureGL.GetID();
+        cmd->format     = internalFormat;
+        cmd->texture    = texID;
     }
 }
 
@@ -1103,16 +1190,25 @@ void GLDeferredCommandBuffer::BindSampler(const GLSampler& samplerGL, std::uint3
     }
 }
 
-#ifdef LLGL_GL_ENABLE_OPENGL2X
-void GLDeferredCommandBuffer::BindGL2XSampler(const GL2XSampler& samplerGL2X, std::uint32_t slot)
+void GLDeferredCommandBuffer::BindEmulatedSampler(const GLEmulatedSampler& emulatedSamplerGL, std::uint32_t slot)
 {
-    auto cmd = AllocCommand<GLCmdBindGL2XSampler>(GLOpcodeBindGL2XSampler);
+    auto cmd = AllocCommand<GLCmdBindEmulatedSampler>(GLOpcodeBindEmulatedSampler);
     {
-        cmd->layer          = slot;
-        cmd->samplerGL2X    = &samplerGL2X;
+        cmd->layer      = slot;
+        cmd->sampler    = &emulatedSamplerGL;
     }
 }
-#endif
+
+void GLDeferredCommandBuffer::FlushMemoryBarriers()
+{
+    if (GLbitfield barriers = FlushAndGetMemoryBarriers())
+    {
+        auto cmd = AllocCommand<GLCmdMemoryBarrier>(GLOpcodeMemoryBarrier);
+        {
+            cmd->barriers = barriers;
+        }
+    }
+}
 
 void GLDeferredCommandBuffer::AllocOpcode(const GLOpcode opcode)
 {

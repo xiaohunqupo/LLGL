@@ -12,8 +12,8 @@
 #include <LLGL/RenderSystem.h>
 #include <LLGL/Container/ArrayView.h>
 
-#include "D3D11CommandQueue.h"
-#include "D3D11CommandBuffer.h"
+#include "Command/D3D11CommandQueue.h"
+#include "Command/D3D11CommandBuffer.h"
 #include "D3D11SwapChain.h"
 
 #include "Buffer/D3D11Buffer.h"
@@ -39,12 +39,32 @@
 #include "../ProxyPipelineCache.h"
 
 #include <dxgi.h>
+
+#if LLGL_DEBUG
+#include <dxgidebug.h>
+#endif
+
 #include "Direct3D11.h"
+
+#if LLGL_D3D11_ENABLE_FEATURELEVEL >= 3
+#   include <dxgi1_5.h>
+#elif defined LLGL_OS_UWP
+#   include <dxgi1_3.h>
+#endif
 
 
 namespace LLGL
 {
 
+namespace Direct3D11
+{
+
+struct RenderSystemNativeHandle;
+
+} // /namespace Direct3D11
+
+
+class Module;
 
 class D3D11RenderSystem final : public RenderSystem
 {
@@ -66,6 +86,9 @@ class D3D11RenderSystem final : public RenderSystem
         // Returns the least common denominator of a suitable sample descriptor for all formats.
         static DXGI_SAMPLE_DESC FindSuitableSampleDesc(ID3D11Device* device, std::size_t numFormats, const DXGI_FORMAT* formats, UINT maxSampleCount = D3D11_MAX_MULTISAMPLE_SAMPLE_COUNT);
 
+        // Calls ClearState() on all ID3D11DeviceContext objects.
+        void ClearStateForAllContexts();
+
         // Returns the ID3D11Device object.
         inline ID3D11Device* GetDevice() const
         {
@@ -78,16 +101,28 @@ class D3D11RenderSystem final : public RenderSystem
             return featureLevel_;
         }
 
+        // Returns whether the D3D11 device supports tearing (DXGI_FEATURE_PRESENT_ALLOW_TEARING).
+        inline bool IsTearingSupported() const
+        {
+            return tearingSupported_;
+        }
+
+    private:
+
+        #include <LLGL/Backend/RenderSystem.Internal.inl>
+
     private:
 
         void CreateFactory();
         void QueryVideoAdapters(long flags, ComPtr<IDXGIAdapter>& outPreferredAdatper);
         HRESULT CreateDevice(IDXGIAdapter* adapter, bool debugDevice = false);
         HRESULT CreateDeviceWithFlags(IDXGIAdapter* adapter, const ArrayView<D3D_FEATURE_LEVEL>& featureLevels, UINT flags);
+        HRESULT QueryDXInterfacesFromNativeHandle(const Direct3D11::RenderSystemNativeHandle& nativeHandle);
+        void QueryDXDeviceVersion();
         void CreateStateManagerAndCommandQueue();
 
-        void QueryRendererInfo();
-        void QueryRenderingCaps();
+        void QueryRendererInfo(RendererInfo& outInfo);
+        void QueryRenderingCaps(RenderingCapabilities& outCaps);
 
         // Returns the minor version of Direct3D 11.X.
         int GetMinorVersion() const;
@@ -98,11 +133,41 @@ class D3D11RenderSystem final : public RenderSystem
             const ImageView*            initialImage
         );
 
+        #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 3
+        bool CheckFactoryFeatureSupport(DXGI_FEATURE feature) const;
+        #endif
+
+        void NotifyBindingTablesOnRelease(D3D11BindingLocator* locator);
+
     private:
+
+        #if LLGL_DEBUG
+
+        struct LiveObjectReporter
+        {
+            LiveObjectReporter();
+            ~LiveObjectReporter();
+
+            std::unique_ptr<Module> debugModule;
+            ComPtr<IDXGIDebug>      debugDevice;
+        };
+
+        // Must be declared first, to ensure its destructor is called after all D3D objects are cleared.
+        std::unique_ptr<LiveObjectReporter>     liveObjectReporter_;
+
+        #endif
 
         /* ----- Common objects ----- */
 
         ComPtr<IDXGIFactory>                    factory_;
+
+        #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 1 || defined LLGL_OS_UWP
+        ComPtr<IDXGIFactory1>                   factory1_;
+        #endif
+
+        #if LLGL_D3D11_ENABLE_FEATURELEVEL >= 2 || defined LLGL_OS_UWP
+        ComPtr<IDXGIFactory2>                   factory2_;
+        #endif
 
         ComPtr<ID3D11Device>                    device_;
 
@@ -121,8 +186,10 @@ class D3D11RenderSystem final : public RenderSystem
         ComPtr<ID3D11DeviceContext>             context_;
 
         D3D_FEATURE_LEVEL                       featureLevel_           = D3D_FEATURE_LEVEL_9_1;
+        bool                                    tearingSupported_       = false;
 
         std::shared_ptr<D3D11StateManager>      stateMngr_;
+        std::vector<D3D11StateManager*>         deferredStateMngrRefs_;
 
         /* ----- Hardware object containers ----- */
 

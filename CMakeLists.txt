@@ -7,7 +7,7 @@
 
 # Originally authored on 09/07/2015
 
-cmake_minimum_required(VERSION 3.7)
+cmake_minimum_required(VERSION 3.12 FATAL_ERROR)
 
 project(LLGL)
 
@@ -19,9 +19,24 @@ else()
     set(LLGL_BUILD_64BIT OFF)
 endif()
 
+set(LLGL_UWP_PLATFORM OFF)
+set(LLGL_IOS_PLATFORM OFF)
+set(LLGL_ANDROID_PLATFORM OFF)
+set(LLGL_WASM_PLATFORM OFF)
+
 if(NOT DEFINED LLGL_TARGET_PLATFORM)
     if("${CMAKE_SYSTEM_NAME}" STREQUAL "Android")
         set(LLGL_TARGET_PLATFORM "Android")
+        if(NOT DEFINED ENV{ANDROID_NDK_ROOT})
+            message(FATAL_ERROR "Cannot build for Android platform: Missing environment variable 'ANDROID_NDK_ROOT'")
+        endif()
+        set(LLGL_ANDROID_PLATFORM ON)
+    elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "WindowsStore")
+        set(LLGL_TARGET_PLATFORM "${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
+        set(LLGL_UWP_PLATFORM ON)
+    elseif("${CMAKE_SYSTEM_NAME}" STREQUAL "Emscripten")
+        set(LLGL_TARGET_PLATFORM "WebAssembly")
+        set(LLGL_WASM_PLATFORM ON)
     elseif(WIN32)
         if(LLGL_BUILD_64BIT)
             set(LLGL_TARGET_PLATFORM "Win64")
@@ -31,6 +46,7 @@ if(NOT DEFINED LLGL_TARGET_PLATFORM)
     elseif(APPLE)
         if("${CMAKE_SYSTEM_NAME}" STREQUAL "iOS")
             set(LLGL_TARGET_PLATFORM "iOS")
+            set(LLGL_IOS_PLATFORM ON)
         else()
             set(LLGL_TARGET_PLATFORM "macOS")
         endif()
@@ -39,25 +55,19 @@ if(NOT DEFINED LLGL_TARGET_PLATFORM)
     endif()
 endif()
 
-set(LLGL_IOS_PLATFORM OFF)
-set(LLGL_ANDROID_PLATFORM OFF)
-
-if(${LLGL_TARGET_PLATFORM} STREQUAL "iOS")
-    set(LLGL_IOS_PLATFORM ON)
-elseif(${LLGL_TARGET_PLATFORM} STREQUAL "Android")
-    if(NOT DEFINED ENV{ANDROID_NDK_ROOT})
-        message(FATAL_ERROR "Cannot build for Android platform: Missing environment variable 'ANDROID_NDK_ROOT'")
-    endif()
-    set(LLGL_ANDROID_PLATFORM ON)
-endif()
-
 
 # === Project ===
 
-set(CMAKE_CXX_STANDARD 11)
+if(LLGL_UWP_PLATFORM)
+    set(CMAKE_CXX_STANDARD 17)
+else()
+    set(CMAKE_CXX_STANDARD 11)
+endif()
+
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set_property(GLOBAL PROPERTY USE_FOLDERS ON)
 
+# XCODE_SCHEME_WORKING_DIRECTORY (used per target) requires CMake 3.17.5
 if(APPLE AND ${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.17.5")
     # Once Xcode schemes are generated for example, we also have to enable them globally or the main projects will disappear
     set(CMAKE_XCODE_GENERATE_SCHEME TRUE)
@@ -70,21 +80,22 @@ set(OUTPUT_DIR ${CMAKE_CURRENT_BINARY_DIR}/build)
 set(EXECUTABLE_OUTPUT_PATH ${OUTPUT_DIR} CACHE PATH "Build directory" FORCE)
 set(LIBRARY_OUTPUT_PATH ${OUTPUT_DIR} CACHE PATH "Build directory" FORCE)
 
-set( EXTERNAL_MODULE_DIR            "${PROJECT_SOURCE_DIR}/cmake"             )
-set( PROJECT_INCLUDE_DIR            "${PROJECT_SOURCE_DIR}/include"           )
-set( EXTERNAL_INCLUDE_DIR           "${PROJECT_SOURCE_DIR}/external"          )
-set( EXAMPLE_PROJECTS_ROOT_DIR      "${PROJECT_SOURCE_DIR}/examples"          )
-set( EXAMPLE_CPP_PROJECTS_DIR       "${EXAMPLE_PROJECTS_ROOT_DIR}/Cpp"        )
-set( EXAMPLE_C99_PROJECTS_DIR       "${EXAMPLE_PROJECTS_ROOT_DIR}/C99"        )
-set( EXAMPLE_CSHARP_PROJECTS_DIR    "${EXAMPLE_PROJECTS_ROOT_DIR}/CSharp"     )
-set( EXAMPLEBASE_PROJECT_DIR        "${EXAMPLE_CPP_PROJECTS_DIR}/ExampleBase" )
-set( EXAMPLE_MEDIA_DIR              "${EXAMPLE_PROJECTS_ROOT_DIR}/Media"      )
-set( TEST_PROJECTS_DIR              "${PROJECT_SOURCE_DIR}/tests"             )
+set( EXTERNAL_MODULE_DIR            "${PROJECT_SOURCE_DIR}/cmake"                   )
+set( PROJECT_INCLUDE_DIR            "${PROJECT_SOURCE_DIR}/include"                 )
+set( EXTERNAL_INCLUDE_DIR           "${PROJECT_SOURCE_DIR}/external"                )
+set( EXAMPLE_PROJECTS_ROOT_DIR      "${PROJECT_SOURCE_DIR}/examples"                )
+set( EXAMPLE_CPP_PROJECTS_DIR       "${EXAMPLE_PROJECTS_ROOT_DIR}/Cpp"              )
+set( EXAMPLE_C99_PROJECTS_DIR       "${EXAMPLE_PROJECTS_ROOT_DIR}/C99"              )
+set( EXAMPLE_CSHARP_PROJECTS_DIR    "${EXAMPLE_PROJECTS_ROOT_DIR}/CSharp"           )
+set( SHARED_PLATFORM_DIR            "${EXAMPLE_PROJECTS_ROOT_DIR}/Shared/Platform"  )
+set( SHARED_ASSETS_DIR              "${EXAMPLE_PROJECTS_ROOT_DIR}/Shared/Assets"    )
+set( TEST_PROJECTS_DIR              "${PROJECT_SOURCE_DIR}/tests"                   )
+set( BACKEND_INCLUDE_DIR            "${PROJECT_INCLUDE_DIR}/LLGL/Backend"           )
 
 
 # === Macros ===
 
-if(LLGL_IOS_PLATFORM OR LLGL_ANDROID_PLATFORM)
+if(LLGL_IOS_PLATFORM OR LLGL_ANDROID_PLATFORM OR LLGL_WASM_PLATFORM)
     set(LLGL_MOBILE_PLATFORM ON)
 else()
     set(LLGL_MOBILE_PLATFORM OFF)
@@ -99,11 +110,8 @@ macro(ADD_PROJECT_DEFINE TARGET_NAME IDENT)
 endmacro()
 
 macro(ADD_DEBUG_DEFINE IDENT)
-    if(MSVC)
-        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /D${IDENT}")
-    else(MSVC)
-        set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -D${IDENT}")
-    endif(MSVC)
+    # Requires CMake 3.12
+    add_compile_definitions("$<$<CONFIG:Debug>:${IDENT}>")
 endmacro()
 
 
@@ -113,7 +121,7 @@ endmacro()
 # Example:
 #   find_source_files(OutputFiles "*.h;*.cpp" ${MyProjectDir}/Base ${MyProjectDir}/Extensions)
 function(find_source_files OUTPUT_LIST FILTERS)
-    # Substitue predefined filters
+    # Substitute predefined filters
     if("${FILTERS}" STREQUAL "C")
         set(FILTERS "*.c;*.h;*.inl")
     elseif("${FILTERS}" STREQUAL "CXX")
@@ -121,7 +129,9 @@ function(find_source_files OUTPUT_LIST FILTERS)
     elseif("${FILTERS}" STREQUAL "OBJC")
         set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm")
     elseif("${FILTERS}" STREQUAL "RES")
-        set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm;*.metal;*.vert;*.frag")
+        set(FILTERS "*.c;*.cpp;*.h;*.inl;*.m;*.mm;*.metal;*.vert;*.frag;*.tesc;*.tese")
+    elseif("${FILTERS}" STREQUAL "INC")
+        set(FILTERS "*.h;*.hpp;*.inl")
     endif()
 
     # Collect all input directories for each filter
@@ -140,13 +150,34 @@ function(find_source_files OUTPUT_LIST FILTERS)
     set(${OUTPUT_LIST} ${${OUTPUT_LIST}} ${FilteredProjectFiles} PARENT_SCOPE)
 endfunction()
 
+# Adds a (variadic) list of resource files to the output project files.
+# The resource files must be located in either the shared assets folder,
+# i.e. either under "examples/Shared/Assets/".
+# Example:
+#   add_project_resource_files(MyProjectFiles "Models/ModelAssets-*.obj" "Textures/TextureAsset-1.jpg")
+function(add_project_resource_files OUTPUT_LIST SRC_FOLDER)
+    # Iterate over all input filenames and expand their paths depending on their file extensions
+    set(ResourceFiles "")
+    set(InputFilenames "${ARGN}")
+    foreach(InputFile ${InputFilenames})
+        if("${InputFile}" MATCHES ".+\\.(png|jpg|dds|tga|obj|txt|map|icns)")
+            file(GLOB SharedResourceFiles "${SHARED_ASSETS_DIR}/${InputFile}")
+            file(GLOB ProjectResourceFiles "${SRC_FOLDER}/${InputFile}")
+            list(APPEND ResourceFiles "${SharedResourceFiles}" "${ProjectResourceFiles}")
+        endif()
+    endforeach()
+    
+    # Write expanded resource filenames to output variable
+    set(${OUTPUT_LIST} ${${OUTPUT_LIST}} ${ResourceFiles} PARENT_SCOPE)
+endfunction()
+
 # Bundles input source files together with platform specific resource files, e.g. macOS and iOS bundles.
 function(bundle_project_files OUTPUT_LIST SRC_FILES)
     if(APPLE)
         if (LLGL_IOS_PLATFORM)
-            find_source_files(BundledProjectFiles "AppIcon.png;LaunchScreen.storyboard" ${EXAMPLEBASE_PROJECT_DIR}/iOS)
+            find_source_files(BundledProjectFiles "AppIcon.png;LaunchScreen.storyboard" ${SHARED_PLATFORM_DIR}/iOS)
         else()
-            find_source_files(BundledProjectFiles "AppIcon.icns" ${EXAMPLEBASE_PROJECT_DIR}/macOS)
+            find_source_files(BundledProjectFiles "AppIcon.icns" ${SHARED_PLATFORM_DIR}/macOS)
         endif()
         list(APPEND BundledProjectFiles "${SRC_FILES}")
     else()
@@ -171,30 +202,24 @@ function(find_project_source_files OUTPUT_LIST SRC_FILES)
     
     # Bundle source files and write to output variable
     bundle_project_files(OutputProjectFiles "${ProjectFiles}")
-    set(${OUTPUT_LIST} ${OutputProjectFiles} PARENT_SCOPE)
-endfunction()
 
-# Adds a (variadic) list of resource files to the output project files.
-# The resource files must be located in the example media folder,
-# i.e. either in "examples/Media/Textures/" or "examples/Media/Models/".
-# Example:
-#   add_project_resource_files(MyProjectFiles ")
-function(add_project_resource_files OUTPUT_LIST)
-    # Iterate over all input filenames and expand their paths depending on their file extensions
-    set(ResourceFiles "")
-    set(InputFilenames "${ARGN}")
-    foreach(InputFile ${InputFilenames})
-        if("${InputFile}" MATCHES ".+\\.(png|jpg|dds)")
-            file(GLOB TextureResourceFiles "${EXAMPLE_MEDIA_DIR}/Textures/${InputFile}")
-            list(APPEND ResourceFiles "${TextureResourceFiles}")
-        elseif("${InputFile}" MATCHES ".+\\.(obj)")
-            file(GLOB ModelResourceFiles "${EXAMPLE_MEDIA_DIR}/Models/${InputFile}")
-            list(APPEND ResourceFiles "${ModelResourceFiles}")
+    # Also bundle potential assets for certain platforms
+    if(APPLE)
+        # Try to find an *.assets.txt file for current project
+        file(GLOB AssetsListFilename "${SRC_FILES}/*.assets.txt")
+        if(NOT "${AssetsListFilename}" STREQUAL "")
+            # Read *.assets.txt file and convert its content into a ';'-separated list to append project assets to bundle
+            file(READ "${AssetsListFilename}" AssetsListContents)
+            if(NOT "${AssetsListContents}" STREQUAL "")
+                string(REGEX REPLACE ";" "\\\\;" AssetsListContents "${AssetsListContents}")
+                string(REGEX REPLACE "\n" ";" AssetsListContents "${AssetsListContents}")
+                add_project_resource_files(OutputProjectFiles "${SRC_FILES}" ${AssetsListContents})
+            endif()
         endif()
-    endforeach()
-    
-    # Write expanded resource filenames to output variable
-    set(${OUTPUT_LIST} ${${OUTPUT_LIST}} ${ResourceFiles} PARENT_SCOPE)
+    endif()
+
+    # Write final project file list to output parameter
+    set(${OUTPUT_LIST} ${OutputProjectFiles} PARENT_SCOPE)
 endfunction()
 
 function(set_llgl_module_properties MODULE_NAME)
@@ -238,12 +263,21 @@ endfunction()
 # Sets the working directory for startup for the specified project.
 function(set_project_working_dir PROJECT_NAME WORKING_DIR)
     if(WIN32)
+        # VS_DEBUGGER_WORKING_DIRECTORY requires CMake 3.8.2
         if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.8.2")
-            set_target_properties(${PROJECT_NAME} PROPERTIES VS_DEBUGGER_WORKING_DIRECTORY "${WORKING_DIR}")
+            set_target_properties(
+                ${PROJECT_NAME} PROPERTIES
+                VS_DEBUGGER_WORKING_DIRECTORY "${WORKING_DIR}"
+            )
         endif()
     elseif(APPLE)
         if(${CMAKE_VERSION} VERSION_GREATER_EQUAL "3.17.5")
-            set_target_properties(${PROJECT_NAME} PROPERTIES XCODE_GENERATE_SCHEME TRUE XCODE_SCHEME_WORKING_DIRECTORY "${WORKING_DIR}")
+            # XCODE_SCHEME_WORKING_DIRECTORY requires CMake 3.17.5
+            set_target_properties(
+                ${PROJECT_NAME} PROPERTIES
+                XCODE_GENERATE_SCHEME           TRUE
+                XCODE_SCHEME_WORKING_DIRECTORY  "${WORKING_DIR}"
+            )
         endif()
     endif()
 endfunction()
@@ -270,21 +304,24 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
 
         # Filter resource files into "Resources" folder
         set(RES_FILES "${SRC_FILES}")
-        list(FILTER RES_FILES INCLUDE REGEX ".+\\.(obj|png|jpg|dds|icns)")
+        list(FILTER RES_FILES INCLUDE REGEX ".+\\.(png|jpg|dds|tga|obj|txt|map|icns)")
         source_group("Resources" FILES ${RES_FILES})
+
+        # Don't compile these resource types, just keep them in the project solution
+        set_source_files_properties(${RES_FILES} PROPERTIES HEADER_FILE_ONLY TRUE)
 
         # Filter shader files into "Shaders" folder
         set(SHADER_FILES "${SRC_FILES}")
-        list(FILTER SHADER_FILES INCLUDE REGEX ".+\\.(metal|vert|frag)")
+        list(FILTER SHADER_FILES INCLUDE REGEX ".+\\.(metal|vert|frag|tesc|tese)")
         source_group("Shaders" FILES ${SHADER_FILES})
 
         # Set app icon for macOS and iOS
         set(BundleResourceFiles "${RES_FILES};${SHADER_FILES}")
         if(LLGL_IOS_PLATFORM)
-            set(BundleInfoPlistFile "${EXTERNAL_MODULE_DIR}/IOSBundleInfo.plist.in")
+            set(BundleInfoPlistFile "${SHARED_PLATFORM_DIR}/iOS/IOSBundleInfo.plist.in")
             set(BundleIconFile "AppIcon.png")
         else()
-            set(BundleInfoPlistFile "${EXTERNAL_MODULE_DIR}/MacOSXBundleInfo.plist.in")
+            set(BundleInfoPlistFile "${SHARED_PLATFORM_DIR}/macOS/MacOSXBundleInfo.plist.in")
             set(BundleIconFile "AppIcon.icns")
         endif()
 
@@ -303,16 +340,23 @@ function(add_llgl_example_project PROJECT_NAME LINKER_LANG SRC_FILES LIB_FILES)
             RESOURCE                            "${BundleResourceFiles}"
         )
     elseif(LLGL_ANDROID_PLATFORM)
-        # Android project configuratons
+        # Android project configurations
         add_library(${PROJECT_NAME} SHARED ${SRC_FILES})
-        target_link_libraries(${PROJECT_NAME} ${LIB_FILES} android_native_app_glue log)
+        target_link_libraries(${PROJECT_NAME} ${LIB_FILES})
     else()
         add_executable(${PROJECT_NAME} ${SRC_FILES})
         target_link_libraries(${PROJECT_NAME} ${LIB_FILES})
     endif()
 
     # Configure linker settings
-    set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE ${LINKER_LANG} DEBUG_POSTFIX "D")
+    if(LLGL_ANDROID_PLATFORM)
+        # When linking the libExample*.so library for Android, we link with C++ semantics.
+        # Otherwise, the libc++_shared.so library will be unintentionally included,
+        # since the static dependencies like libLLGL.so must be build with C++, regardingless of the example project's language
+        set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE CXX DEBUG_POSTFIX "D")
+    else()
+        set_target_properties(${PROJECT_NAME} PROPERTIES LINKER_LANGUAGE ${LINKER_LANG} DEBUG_POSTFIX "D")
+    endif()
     
     # Configure working directory and project solution folder
     if(${PROJECT_NAME} MATCHES "Example_C99_+")
@@ -344,13 +388,11 @@ if(WIN32)
     ADD_DEFINE(_SCL_SECURE_NO_WARNINGS)
     ADD_DEFINE(UNICODE)
     ADD_DEFINE(NOMINMAX)
+    ADD_DEFINE(_DISABLE_CONSTEXPR_MUTEX_CONSTRUCTOR)
     if(MSVC)
         # Disable some warnings for MSVC compiler
         set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} /wd4250 /wd4251 /wd4290 /wd4103")
     endif(MSVC)
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} /DLLGL_DEBUG")
-else()
-    set(CMAKE_CXX_FLAGS_DEBUG "${CMAKE_CXX_FLAGS_DEBUG} -DLLGL_DEBUG")
 endif(WIN32)
 
 ADD_DEBUG_DEFINE(LLGL_DEBUG)
@@ -364,6 +406,7 @@ endif()
 
 set(SUMMARY_LIBRARY_TYPE "Unknown")
 set(SUMMARY_TARGET_ARCH "Unknown")
+set(SUMMARY_FLAGS "")
 
 
 # === Options ===
@@ -380,7 +423,6 @@ endif()
 
 option(LLGL_ENABLE_CHECKED_CAST "Enable dynamic checked cast (only in Debug mode)" ON)
 option(LLGL_ENABLE_DEBUG_LAYER "Enable renderer debug layer (for both Debug and Release mode)" ON)
-option(LLGL_ENABLE_JIT_COMPILER "Enable Just-in-Time (JIT) compilation for emulated deferred command buffers (experimental)" OFF)
 option(LLGL_ENABLE_EXCEPTIONS "Enable C++ exceptions" OFF)
 
 option(LLGL_PREFER_STL_CONTAINERS "Prefers C++ STL containers over custom containers, e.g. std::vector over SmallVector<T>" OFF)
@@ -391,22 +433,27 @@ option(LLGL_BUILD_EXAMPLES "Include example projects" OFF)
 
 option(LLGL_BUILD_RENDERER_NULL "Include Null renderer project" ON)
 
-if(LLGL_MOBILE_PLATFORM)
-    option(LLGL_BUILD_RENDERER_OPENGLES3 "Include OpenGLES 3 renderer project" ON)
-else()
-    option(LLGL_BUILD_RENDERER_OPENGL "Include OpenGL renderer project" ON)
+if(NOT LLGL_UWP_PLATFORM)
+    if(EMSCRIPTEN)
+        option(LLGL_BUILD_RENDERER_WEBGL "Include WebGL renderer project" ON)
+        option(LLGL_ENABLE_EMSCRIPTEN_PTHREADS "Build for Wasm platform with pthreads (USE_PTHREADS). This limits browser availability!" OFF)
+    elseif(LLGL_MOBILE_PLATFORM)
+        option(LLGL_BUILD_RENDERER_OPENGLES3 "Include OpenGLES 3 renderer project" ON)
+    else()
+        option(LLGL_BUILD_RENDERER_OPENGL "Include OpenGL renderer project" ON)
+    endif()
 endif()
 
 if(APPLE)
     option(LLGL_MACOS_ENABLE_COREVIDEO "Enable CoreVideo framework (for refresh rate of built-in displays)" ON)
-    option(LLGL_BUILD_RENDERER_METAL "Include Metal renderer project (experimental)" OFF)
-else()
+    option(LLGL_BUILD_RENDERER_METAL "Include Metal renderer project" ON)
+elseif(NOT LLGL_UWP_PLATFORM)
     option(LLGL_BUILD_RENDERER_VULKAN "Include Vulkan renderer project (experimental)" OFF)
 endif()
 
 if(WIN32)
     option(LLGL_BUILD_RENDERER_DIRECT3D11 "Include Direct3D11 renderer project" ON)
-    option(LLGL_BUILD_RENDERER_DIRECT3D12 "Include Direct3D12 renderer project (experimental)" OFF)
+    option(LLGL_BUILD_RENDERER_DIRECT3D12 "Include Direct3D12 renderer project" ON)
 endif()
 
 option(LLGL_BUILD_WRAPPER_C99 "Include wrapper for C99" OFF)
@@ -426,10 +473,6 @@ if(LLGL_ENABLE_DEBUG_LAYER)
     ADD_DEFINE(LLGL_ENABLE_DEBUG_LAYER)
 endif()
 
-if(LLGL_ENABLE_JIT_COMPILER)
-    ADD_DEFINE(LLGL_ENABLE_JIT_COMPILER)
-endif()
-
 if(LLGL_ENABLE_EXCEPTIONS)
     ADD_DEFINE(LLGL_ENABLE_EXCEPTIONS)
 endif()
@@ -446,15 +489,43 @@ if(LLGL_MACOS_ENABLE_COREVIDEO)
     ADD_DEFINE(LLGL_MACOS_ENABLE_COREVIDEO)
 endif()
 
-if(LLGL_MOBILE_PLATFORM)
-    set(ARCH_ARM64 ON)
-    set(SUMMARY_TARGET_ARCH "ARM64")
+if(LLGL_WASM_PLATFORM)
+    set(SUMMARY_TARGET_ARCH "wasm")
+elseif(LLGL_MOBILE_PLATFORM)
+    if("${ANDROID_ABI}" STREQUAL "x86_64")
+        set(ARCH_AMD64 ON)
+        set(SUMMARY_TARGET_ARCH "x86-64")
+    elseif("${ANDROID_ABI}" STREQUAL "x86")
+        set(ARCH_IA32 ON)
+        set(SUMMARY_TARGET_ARCH "x86")
+    else()
+        set(ARCH_ARM64 ON)
+        set(SUMMARY_TARGET_ARCH "arm64")
+    endif()
 elseif(APPLE OR LLGL_BUILD_64BIT)
     set(ARCH_AMD64 ON)
-    set(SUMMARY_TARGET_ARCH "AMD64 (x86-x64)")
+    set(SUMMARY_TARGET_ARCH "x86-64")
 else()
     set(ARCH_IA32 ON)
-    set(SUMMARY_TARGET_ARCH "IA-32 (x86)")
+    set(SUMMARY_TARGET_ARCH "x86")
+endif()
+
+if(EMSCRIPTEN)
+    # When USE_PTHREADS is enabled, HTML5 pages cannot be opened in Chrome unless launched with '--enable-features=SharedArrayBuffer'
+    if(LLGL_ENABLE_EMSCRIPTEN_PTHREADS)
+        add_compile_options("SHELL:-s USE_PTHREADS")
+        add_link_options("SHELL:-s USE_PTHREADS")
+        set(SUMMARY_FLAGS ${SUMMARY_FLAGS} "pthreads")
+    endif()
+
+    # TODO: Emscripten file system pulls in a large amount of code. Consider limiting file system support to examples and tests.
+    add_link_options("SHELL:-s FORCE_FILESYSTEM") # for examples
+
+    # LLGL needs at least WebGL 2.0
+    add_link_options("SHELL:-s MIN_WEBGL_VERSION=2")
+    add_link_options("SHELL:-s MAX_WEBGL_VERSION=2")
+    add_link_options("SHELL:-s OFFSCREEN_FRAMEBUFFER") # required for explicit swap control
+    add_link_options("SHELL:-s ASSERTIONS")
 endif()
 
 
@@ -472,22 +543,6 @@ find_source_files(FilesCore                         CXX     "${PROJECT_SOURCE_DI
 find_source_files(FilesPlatformBase                 CXX     "${PROJECT_SOURCE_DIR}/sources/Platform")
 find_source_files(FilesRenderer                     CXX     "${PROJECT_SOURCE_DIR}/sources/Renderer")
 
-if(LLGL_ENABLE_JIT_COMPILER)
-    find_source_files(FilesJIT                      CXX     "${PROJECT_SOURCE_DIR}/sources/JIT")
-    if(ARCH_IA32)
-        find_source_files(FilesJITArch              CXX     "${PROJECT_SOURCE_DIR}/sources/JIT/Arch/IA32")
-    elseif(ARCH_AMD64)
-        find_source_files(FilesJITArch              CXX     "${PROJECT_SOURCE_DIR}/sources/JIT/Arch/AMD64")
-    elseif(ARCH_ARM64)
-        find_source_files(FilesJITArch              CXX     "${PROJECT_SOURCE_DIR}/sources/JIT/Arch/ARM64")
-    endif()
-    if(WIN32)
-        find_source_files(FilesJITPlatform          CXX     "${PROJECT_SOURCE_DIR}/sources/JIT/Platform/Win32")
-    else()
-        find_source_files(FilesJITPlatform          CXX     "${PROJECT_SOURCE_DIR}/sources/JIT/Platform/POSIX")
-    endif()
-endif()
-
 if(LLGL_ENABLE_DEBUG_LAYER)
     find_source_files(FilesRendererDbg              CXX     "${PROJECT_SOURCE_DIR}/sources/Renderer/DebugLayer")
     find_source_files(FilesRendererDbgBuffer        CXX     "${PROJECT_SOURCE_DIR}/sources/Renderer/DebugLayer/Buffer")
@@ -496,9 +551,17 @@ if(LLGL_ENABLE_DEBUG_LAYER)
     find_source_files(FilesRendererDbgTexture       CXX     "${PROJECT_SOURCE_DIR}/sources/Renderer/DebugLayer/Texture")
 endif()
 
-if(WIN32)
-    find_source_files(FilesPlatform                 CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Win32")
-    find_source_files(FilesIncludePlatform          CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Win32")
+if(EMSCRIPTEN)
+    find_source_files(FilesPlatform                 CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Wasm")
+    find_source_files(FilesIncludePlatform          CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Wasm")
+elseif(WIN32)
+    if(LLGL_UWP_PLATFORM)
+        find_source_files(FilesPlatform             CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/UWP")
+        find_source_files(FilesIncludePlatform      CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/UWP")
+    else()
+        find_source_files(FilesPlatform             CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Win32")
+        find_source_files(FilesIncludePlatform      CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Win32")
+    endif()
 else()
     set(PlatformPosixDir "${PROJECT_SOURCE_DIR}/sources/Platform/POSIX")
     if(APPLE)
@@ -511,13 +574,22 @@ else()
         endif()
     elseif(UNIX)
         if(LLGL_ANDROID_PLATFORM)
-            find_source_files(FilesPlatform         CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Android" "${PlatformPosixDir}")
+            find_source_files(FilesPlatform         CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Android")
             find_source_files(FilesIncludePlatform  CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Android")
         else()
             find_source_files(FilesPlatform         CXX     "${PROJECT_SOURCE_DIR}/sources/Platform/Linux" "${PlatformPosixDir}")
             find_source_files(FilesIncludePlatform  CXX     "${PROJECT_INCLUDE_DIR}/LLGL/Platform/Linux")
         endif()
     endif()
+endif()
+
+if(LLGL_ANDROID_PLATFORM)
+    set(ANDROID_APP_GLUE_DIR "$ENV{ANDROID_NDK_ROOT}/sources/android/native_app_glue")
+    set(
+        FilesAndroidNativeAppGlue
+        "${ANDROID_APP_GLUE_DIR}/android_native_app_glue.c"
+        "${ANDROID_APP_GLUE_DIR}/android_native_app_glue.h"
+    )
 endif()
 
 
@@ -535,12 +607,6 @@ source_group("Sources\\Core"        FILES ${FilesCore})
 source_group("Sources\\Platform"    FILES ${FilesPlatformBase} ${FilesPlatform})
 source_group("Sources\\Renderer"    FILES ${FilesRenderer})
 
-if(LLGL_ENABLE_JIT_COMPILER)
-    source_group("Sources\\JIT"             FILES ${FilesJIT})
-    source_group("Sources\\JIT\\Arch"       FILES ${FilesJITArch})
-    source_group("Sources\\JIT\\Platform"   FILES ${FilesJITPlatform})
-endif()
-
 if(LLGL_ENABLE_DEBUG_LAYER)
     source_group("Sources\\Renderer\\DebugLayer"                FILES ${FilesRendererDbg})
     source_group("Sources\\Renderer\\DebugLayer\\Buffer"        FILES ${FilesRendererDbgBuffer})
@@ -549,12 +615,20 @@ if(LLGL_ENABLE_DEBUG_LAYER)
     source_group("Sources\\Renderer\\DebugLayer\\Texture"       FILES ${FilesRendererDbgTexture})
 endif()
 
+if(LLGL_ANDROID_PLATFORM)
+    source_group("native_app_glue" FILES ${FilesAndroidNativeAppGlue})
+endif()
+
 
 # === Include directories ===
 
 include_directories("${PROJECT_INCLUDE_DIR}")
 
 include("${EXTERNAL_MODULE_DIR}/FindGaussianLib.cmake")
+
+if(LLGL_ANDROID_PLATFORM)
+    include_directories(${ANDROID_APP_GLUE_DIR})
+endif(LLGL_ANDROID_PLATFORM)
 
 
 # === Projects ===
@@ -575,15 +649,6 @@ set(
 
 if(MSVC)
     list(APPEND FilesLLGL ${FilesMsvcNatvis})
-endif()
-
-if(LLGL_ENABLE_JIT_COMPILER)
-    list(
-        APPEND FilesLLGL
-        ${FilesJIT}
-        ${FilesJITArch}
-        ${FilesJITPlatform}
-    )
 endif()
 
 if(LLGL_ENABLE_DEBUG_LAYER)
@@ -621,7 +686,9 @@ target_include_directories(LLGL INTERFACE
                            $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 
 if(LLGL_ANDROID_PLATFORM)
-    target_link_libraries(LLGL android log)
+    add_library(android_native_app_glue STATIC ${FilesAndroidNativeAppGlue})
+    set_target_properties(android_native_app_glue PROPERTIES LINKER_LANGUAGE C)
+    target_link_libraries(LLGL android log android_native_app_glue)
 elseif(LLGL_IOS_PLATFORM)
     target_link_libraries(LLGL PUBLIC "-framework Foundation -framework UIKit")
 elseif(APPLE)
@@ -630,19 +697,27 @@ elseif(APPLE)
     if(LLGL_MACOS_ENABLE_COREVIDEO)
         target_link_libraries(LLGL "-framework CoreVideo")
     endif()
+elseif(EMSCRIPTEN)
+    target_link_libraries(LLGL embind)
 elseif(UNIX)
     target_link_libraries(LLGL X11 pthread Xrandr)
+#elseif(LLGL_UWP_PLATFORM)
+#    set_target_properties(LLGL PROPERTIES VS_WINRT_REFERENCES "Windows.Foundation.UniversalApiContract")
 endif()
 
 set_property(GLOBAL PROPERTY LLGL_GLOBAL_MODULE_LIST LLGL)
 
 set_llgl_module_properties(LLGL)
 
+if(LLGL_ANDROID_PLATFORM)
+    append_global_property(LLGL_GLOBAL_MODULE_LIST None android_native_app_glue)
+endif()
+
 if(LLGL_BUILD_RENDERER_NULL)
     add_subdirectory(sources/Renderer/Null)
 endif()
 
-if(LLGL_BUILD_RENDERER_OPENGL OR LLGL_BUILD_RENDERER_OPENGLES3)
+if(LLGL_BUILD_RENDERER_OPENGL OR LLGL_BUILD_RENDERER_OPENGLES3 OR LLGL_BUILD_RENDERER_WEBGL)
     add_subdirectory(sources/Renderer/OpenGL)
 endif()
 
@@ -666,7 +741,9 @@ if(LLGL_BUILD_RENDERER_DIRECT3D12)
     add_subdirectory(sources/Renderer/Direct3D12)
 endif()
 
-if(LLGL_BUILD_STATIC_LIB)
+# Static libs must all be linked to the final apps (LLGL_BUILD_STATIC_LIB).
+# Also UWP apps need references to all loaded modules (LLGL_UWP_PLATFORM).
+if(LLGL_BUILD_STATIC_LIB OR LLGL_UWP_PLATFORM)
     get_property(LLGL_MODULE_LIBS GLOBAL PROPERTY LLGL_GLOBAL_MODULE_LIST)
 else()
     set(LLGL_MODULE_LIBS LLGL)
@@ -712,66 +789,67 @@ configure_package_config_file(
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/LLGLConfig.cmake" DESTINATION "${CMAKE_INSTALL_LIBDIR}/cmake/LLGL")
 
 # Summary Information
-message("~~~ Build Summary ~~~")
+message(STATUS "~~~ Build Summary ~~~")
 
-message("Target Platform: ${LLGL_TARGET_PLATFORM}")
-message("Target Architecture: ${SUMMARY_TARGET_ARCH}")
-message("Target Library: ${SUMMARY_LIBRARY_TYPE}")
+message(STATUS "Target Platform: ${LLGL_TARGET_PLATFORM}")
+message(STATUS "Target Architecture: ${SUMMARY_TARGET_ARCH}")
+message(STATUS "Target Library: ${SUMMARY_LIBRARY_TYPE}")
 
 if(LLGL_BUILD_RENDERER_NULL)
-    message("Build Renderer: Null")
+    message(STATUS "Build Renderer: Null")
 endif()
 
 if(LLGL_BUILD_RENDERER_OPENGL)
-    message("Build Renderer: OpenGL")
+    message(STATUS "Build Renderer: OpenGL")
 endif()
 
 if(LLGL_BUILD_RENDERER_OPENGLES3)
-    message("Build Renderer: OpenGLES 3")
+    message(STATUS "Build Renderer: ${LLGL_GL_ENABLE_OPENGLES}")
+endif()
+
+if(LLGL_BUILD_RENDERER_WEBGL)
+    message(STATUS "Build Renderer: WebGL")
 endif()
 
 if(LLGL_BUILD_RENDERER_VULKAN)
-    message("Build Renderer: Vulkan")
+    message(STATUS "Build Renderer: Vulkan")
 endif()
 
 if(LLGL_BUILD_RENDERER_METAL)
-    message("Build Renderer: Metal")
+    message(STATUS "Build Renderer: Metal")
 endif()
 
 if(LLGL_BUILD_RENDERER_DIRECT3D11)
-    if(${LLGL_D3D11_ENABLE_FEATURELEVEL} STREQUAL "Direct3D 11.3")
-        message("Build Renderer: Direct3D 11.3")
-    elseif(${LLGL_D3D11_ENABLE_FEATURELEVEL} STREQUAL "Direct3D 11.2")
-        message("Build Renderer: Direct3D 11.2")
-    elseif(${LLGL_D3D11_ENABLE_FEATURELEVEL} STREQUAL "Direct3D 11.1")
-        message("Build Renderer: Direct3D 11.1")
-    else()
-        message("Build Renderer: Direct3D 11.0")
-    endif()
+    message(STATUS "Build Renderer: ${LLGL_D3D11_ENABLE_FEATURELEVEL}")
 endif()
 
 if(LLGL_BUILD_RENDERER_DIRECT3D12)
-    message("Build Renderer: Direct3D 12.0")
+    message(STATUS "Build Renderer: ${LLGL_D3D12_ENABLE_FEATURELEVEL}")
 endif()
 
 if(LLGL_BUILD_WRAPPER_C99)
-    message("Build Wrapper: C99")
+    message(STATUS "Build Wrapper: C99")
 endif()
 
 if(LLGL_BUILD_WRAPPER_CSHARP)
-    message("Build Wrapper: C#")
+    message(STATUS "Build Wrapper: C#")
 endif()
 
 if(LLGL_BUILD_EXAMPLES)
-    message("Build Examples")
+    message(STATUS "Build Examples")
 endif()
 
 if(LLGL_BUILD_TESTS)
-    message("Build Tests")
+    message(STATUS "Build Tests")
 endif()
 
 if(LLGL_VK_ENABLE_SPIRV_REFLECT)
-    message("Including Submodule: SPIRV-Headers")
+    message(STATUS "Including Submodule: SPIRV-Headers")
 endif()
 
+if(NOT "${SUMMARY_FLAGS}" STREQUAL "")
+    message(STATUS "Options: ${SUMMARY_FLAGS}")
+endif()
+
+message(STATUS "~~~~~~~~~~~~~~~~~~~~~")
 

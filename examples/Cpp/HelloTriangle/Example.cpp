@@ -14,24 +14,42 @@
 #define ENABLE_MULTISAMPLING    1
 
 // Enable caching of pipeline state objects (PSO)
-#define ENABLE_CACHED_PSO       1
+#define ENABLE_CACHED_PSO       0
 
+#ifdef LLGL_OS_ANDROID
+#define EXIT(VAL) return
+void android_main(android_app* androidApp)
+#else
+#define EXIT(VAL) return (VAL)
 int main(int argc, char* argv[])
+#endif
 {
     try
     {
         LLGL::Log::RegisterCallbackStd();
 
         // Let the user choose an available renderer
-        std::string rendererModule = GetSelectedRendererModule(argc, argv);
+        LLGL::RenderSystemDescriptor rendererDesc;
+
+        #ifdef LLGL_OS_ANDROID
+        rendererDesc.moduleName = "OpenGLES3";
+        rendererDesc.androidApp = androidApp;
+        #else
+        const std::string rendererModule = GetSelectedRendererModule(argc, argv);
+        rendererDesc.moduleName = rendererModule;
+        #endif
+
+        //rendererDesc.flags = LLGL::RenderSystemFlags::DebugDevice;
+        LLGL::RenderingDebugger debugger;
+        rendererDesc.debugger = &debugger;
 
         // Load render system module
         LLGL::Report report;
-        LLGL::RenderSystemPtr renderer = LLGL::RenderSystem::Load(rendererModule, &report);
+        LLGL::RenderSystemPtr renderer = LLGL::RenderSystem::Load(rendererDesc, &report);
         if (!renderer)
         {
             LLGL::Log::Errorf("%s", report.GetText());
-            return 1;
+            EXIT(1);
         }
 
         // Create swap-chain
@@ -58,23 +76,32 @@ int main(int argc, char* argv[])
             "Vendor:               %s\n"
             "Shading Language:     %s\n"
             "Swap Chain Format:    %s\n"
-            "Depth/Stencil Format: %s\n",
+            "Depth/Stencil Format: %s\n"
+            "Resolution:           %u x %u\n"
+            "Samples:              %u\n",
             info.rendererName.c_str(),
             info.deviceName.c_str(),
             info.vendorName.c_str(),
             info.shadingLanguageName.c_str(),
             LLGL::ToString(swapChain->GetColorFormat()),
-            LLGL::ToString(swapChain->GetDepthStencilFormat())
+            LLGL::ToString(swapChain->GetDepthStencilFormat()),
+            swapChain->GetResolution().width,
+            swapChain->GetResolution().height,
+            swapChain->GetSamples()
         );
 
         // Enable V-sync
         swapChain->SetVsyncInterval(1);
 
         // Set window title and show window
-        auto& window = LLGL::CastTo<LLGL::Window>(swapChain->GetSurface());
+        LLGL::Window* window = nullptr;
 
-        window.SetTitle(L"LLGL Example: Hello Triangle");
-        window.Show();
+        if (LLGL::IsInstanceOf<LLGL::Window>(swapChain->GetSurface()))
+        {
+            window = LLGL::CastTo<LLGL::Window>(&swapChain->GetSurface());
+            window->SetTitle(L"LLGL Example: Hello Triangle");
+            window->Show();
+        }
 
         // Vertex data structure
         struct Vertex
@@ -154,6 +181,8 @@ int main(int argc, char* argv[])
         {
             vertShaderDesc = { LLGL::ShaderType::Vertex,   "Example.metal", "VS", "1.1" };
             fragShaderDesc = { LLGL::ShaderType::Fragment, "Example.metal", "PS", "1.1" };
+            vertShaderDesc.flags |= LLGL::ShaderCompileFlags::DefaultLibrary;
+            fragShaderDesc.flags |= LLGL::ShaderCompileFlags::DefaultLibrary;
         }
 
         // Specify vertex attributes for vertex shader
@@ -232,7 +261,7 @@ int main(int argc, char* argv[])
             if (report->HasErrors())
             {
                 LLGL::Log::Errorf("%s\n", report->GetText());
-                return 1;
+                EXIT(1);
             }
         }
 
@@ -240,7 +269,9 @@ int main(int argc, char* argv[])
         LLGL::CommandBuffer* commands = renderer->CreateCommandBuffer(LLGL::CommandBufferFlags::ImmediateSubmit);
 
         // Enter main loop
-        while (LLGL::Surface::ProcessEvents() && !window.HasQuit())
+        const float bgColor[4] = { 0.1f, 0.1f, 0.2f, 1.0f };
+
+        while (LLGL::Surface::ProcessEvents() && (window == nullptr || !window->HasQuit()))
         {
             // Begin recording commands
             commands->Begin();
@@ -255,7 +286,7 @@ int main(int argc, char* argv[])
                 commands->BeginRenderPass(*swapChain);
                 {
                     // Clear color buffer
-                    commands->Clear(LLGL::ClearFlags::Color);
+                    commands->Clear(LLGL::ClearFlags::Color, bgColor);
 
                     // Set graphics pipeline
                     commands->SetPipelineState(*pipeline);
@@ -278,5 +309,5 @@ int main(int argc, char* argv[])
         system("pause");
         #endif
     }
-    return 0;
+    EXIT(0);
 }

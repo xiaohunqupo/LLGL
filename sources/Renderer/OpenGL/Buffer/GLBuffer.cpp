@@ -6,12 +6,13 @@
  */
 
 #include "GLBuffer.h"
-#include "../GLProfile.h"
+#include "../Profile/GLProfile.h"
 #include "../GLObjectUtils.h"
 #include "../Ext/GLExtensions.h"
 #include "../GLTypes.h"
 #include "../Ext/GLExtensionRegistry.h"
 #include "../../../Core/CoreUtils.h"
+#include <LLGL/Backend/OpenGL/NativeHandle.h>
 #include <memory>
 
 
@@ -37,11 +38,11 @@ static GLBufferTarget FindPrimaryBufferTarget(long bindFlags)
     return GLBufferTarget::ArrayBuffer;
 }
 
-GLBuffer::GLBuffer(long bindFlags) :
+GLBuffer::GLBuffer(long bindFlags, const char* debugName) :
     Buffer  { bindFlags                          },
     target_ { FindPrimaryBufferTarget(bindFlags) }
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         /* Creates a new GL buffer object and binds it to an unspecified target */
@@ -53,15 +54,43 @@ GLBuffer::GLBuffer(long bindFlags) :
         /* Creates a new GL buffer object (must be bound to a target before it can be used) */
         glGenBuffers(1, &id_);
     }
+
+    if (debugName != nullptr)
+        SetDebugName(debugName);
 }
 
 GLBuffer::~GLBuffer()
 {
     glDeleteBuffers(1, &id_);
     GLStateManager::Get().NotifyBufferRelease(*this);
+
+    /* Delete texture if this was a texture-buffer and notify state manager */
+    if (texID_ != 0)
+        GLStateManager::Get().DeleteTexture(texID_, GLTextureTarget::TextureBuffer);
 }
 
-void GLBuffer::SetName(const char* name)
+bool GLBuffer::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    if (auto* nativeHandleGL = GetTypedNativeHandle<OpenGL::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
+    {
+        #if LLGL_GLEXT_DIRECT_STATE_ACCESS
+        if (HasExtension(GLExt::ARB_direct_state_access))
+        {
+            nativeHandleGL->type = OpenGL::ResourceNativeType::ImmutableBuffer;
+        }
+        else
+        #endif
+        {
+            nativeHandleGL->type = OpenGL::ResourceNativeType::Buffer;
+        }
+        nativeHandleGL->id                  = GetID();
+        nativeHandleGL->buffer.textureId    = GetTexID();
+        return true;
+    }
+    return false;
+}
+
+void GLBuffer::SetDebugName(const char* name)
 {
     GLSetObjectLabel(GL_BUFFER, GetID(), name);
 }
@@ -101,14 +130,14 @@ BufferDescriptor GLBuffer::GetDesc() const
 
 void GLBuffer::BufferStorage(GLsizeiptr size, const void* data, GLbitfield flags, GLenum usage)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         /* Allocate buffer with immutable storage (4.5+) */
         glNamedBufferStorage(GetID(), size, data, flags);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #ifdef GL_ARB_buffer_storage
     if (HasExtension(GLExt::ARB_buffer_storage))
     {
@@ -127,13 +156,13 @@ void GLBuffer::BufferStorage(GLsizeiptr size, const void* data, GLbitfield flags
 
 void GLBuffer::BufferSubData(GLintptr offset, GLsizeiptr size, const void* data)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glNamedBufferSubData(GetID(), offset, size, data);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         GLStateManager::Get().BindGLBuffer(*this);
         glBufferSubData(GetGLTarget(), offset, size, data);
@@ -142,13 +171,13 @@ void GLBuffer::BufferSubData(GLintptr offset, GLsizeiptr size, const void* data)
 
 void GLBuffer::GetBufferSubData(GLintptr offset, GLsizeiptr size, void* data)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glGetNamedBufferSubData(GetID(), offset, size, data);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         GLStateManager::Get().BindGLBuffer(*this);
         GLProfile::GetBufferSubData(GetGLTarget(), offset, size, data);
@@ -157,13 +186,13 @@ void GLBuffer::GetBufferSubData(GLintptr offset, GLsizeiptr size, void* data)
 
 void GLBuffer::ClearBufferData(std::uint32_t data)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glClearNamedBufferData(GetID(), GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT, &data);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #ifdef GL_ARB_clear_buffer_object
     if (HasExtension(GLExt::ARB_clear_buffer_object))
     {
@@ -193,13 +222,13 @@ void GLBuffer::ClearBufferData(std::uint32_t data)
 void GLBuffer::ClearBufferSubData(GLintptr offset, GLsizeiptr size, std::uint32_t data)
 {
     #if 0 // TODO: does not work properly here with DSA version???
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glClearNamedBufferSubData(GetID(), GL_R32UI, offset, size, GL_RED_INTEGER, GL_UNSIGNED_INT, &data);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #endif // /TODO
     #ifdef GL_ARB_clear_buffer_object
     if (HasExtension(GLExt::ARB_clear_buffer_object))
@@ -223,14 +252,14 @@ void GLBuffer::ClearBufferSubData(GLintptr offset, GLsizeiptr size, std::uint32_
 
 void GLBuffer::CopyBufferSubData(const GLBuffer& readBuffer, GLintptr readOffset, GLintptr writeOffset, GLsizeiptr size)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         /* Copy buffer directly (GL 4.5+) */
         glCopyNamedBufferSubData(readBuffer.GetID(), GetID(), readOffset, writeOffset, size);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #ifdef GL_ARB_copy_buffer
     if (HasExtension(GLExt::ARB_copy_buffer))
     {
@@ -257,13 +286,13 @@ void GLBuffer::CopyBufferSubData(const GLBuffer& readBuffer, GLintptr readOffset
 
 void* GLBuffer::MapBuffer(GLenum access)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         return glMapNamedBuffer(GetID(), access);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         GLStateManager::Get().BindGLBuffer(*this);
         return GLProfile::MapBuffer(GetGLTarget(), access);
@@ -272,13 +301,13 @@ void* GLBuffer::MapBuffer(GLenum access)
 
 void* GLBuffer::MapBufferRange(GLintptr offset, GLsizeiptr length, GLbitfield access)
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         return glMapNamedBufferRange(GetID(), offset, length, access);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     #ifdef GL_ARB_map_buffer_range
     if (HasExtension(GLExt::ARB_map_buffer_range))
     {
@@ -295,22 +324,22 @@ void* GLBuffer::MapBufferRange(GLintptr offset, GLsizeiptr length, GLbitfield ac
 
 void GLBuffer::UnmapBuffer()
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         glUnmapNamedBuffer(GetID());
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         GLStateManager::Get().BindGLBuffer(*this);
-        glUnmapBuffer(GetGLTarget());
+        GLProfile::UnmapBuffer(GetGLTarget());
     }
 }
 
 void GLBuffer::GetBufferParams(GLint* size, GLint* usage, GLint* storageFlags) const
 {
-    #if defined GL_ARB_direct_state_access && defined LLGL_GL_ENABLE_DSA_EXT
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
     if (HasExtension(GLExt::ARB_direct_state_access))
     {
         /* Query buffer attributes directly using DSA */
@@ -324,7 +353,7 @@ void GLBuffer::GetBufferParams(GLint* size, GLint* usage, GLint* storageFlags) c
             glGetNamedBufferParameteriv(GetID(), GL_BUFFER_STORAGE_FLAGS, storageFlags);
     }
     else
-    #endif // /GL_ARB_direct_state_access
+    #endif // /LLGL_GLEXT_DIRECT_STATE_ACCESS
     {
         /* Push currently bound texture onto stack to restore it after query */
         GLStateManager::Get().PushBoundBuffer(GetTarget());
@@ -357,6 +386,59 @@ void GLBuffer::GetBufferParams(GLint* size, GLint* usage, GLint* storageFlags) c
         }
         GLStateManager::Get().PopBoundBuffer();
     }
+}
+
+void GLBuffer::CreateTexBuffer(GLenum internalFormat)
+{
+    #if LLGL_GLEXT_TEXTURE_BUFFER_OBJECT
+
+    LLGL_ASSERT(GetTexID() == 0, "tex-buffer must not be created more than once");
+
+    /* Create texture buffer and bind to this buffer */
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
+    if (HasExtension(GLExt::ARB_direct_state_access))
+    {
+        glCreateTextures(GL_TEXTURE_BUFFER, 1, &texID_);
+        glTextureBuffer(texID_, internalFormat, id_);
+    }
+    else
+    #endif
+    {
+        glGenTextures(1, &texID_);
+        GLStateManager::Get().BindTexture(GLTextureTarget::TextureBuffer, texID_);
+        glTexBuffer(GL_TEXTURE_BUFFER, internalFormat, id_);
+    }
+
+    /* Store internal GL format */
+    texInternalFormat_ = internalFormat;
+
+    #endif // /LLGL_GLEXT_TEXTURE_BUFFER_OBJECT
+}
+
+void GLBuffer::CreateTexBufferRange(GLuint& texID, GLintptr offset, GLsizeiptr size) const
+{
+    #if LLGL_GLEXT_TEXTURE_BUFFER_RANGE
+
+    LLGL_ASSERT(GetTexID() == 0, "tex-buffer must not be created more than once");
+
+    /* Create texture buffer and bind to this buffer */
+    #if LLGL_GLEXT_DIRECT_STATE_ACCESS
+    if (HasExtension(GLExt::ARB_direct_state_access))
+    {
+        if (texID == 0)
+            glCreateTextures(GL_TEXTURE_BUFFER, 1, &texID);
+        glTextureBufferRange(texID, texInternalFormat_, id_, offset, size);
+    }
+    else
+    #endif
+    {
+        if (texID == 0)
+            glGenTextures(1, &texID);
+        GLStateManager::Get().BindTexture(GLTextureTarget::TextureBuffer, texID);
+        glTexBufferRange(GL_TEXTURE_BUFFER, texInternalFormat_, id_, offset, size);
+    }
+
+    #endif // /LLGL_GLEXT_TEXTURE_BUFFER_RANGE
 }
 
 void GLBuffer::SetIndexType(const Format format)

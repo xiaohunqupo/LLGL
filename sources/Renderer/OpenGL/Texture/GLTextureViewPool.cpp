@@ -8,7 +8,7 @@
 #include "GLTextureViewPool.h"
 #include "GLTexture.h"
 #include "../RenderState/GLStateManager.h"
-#include "../GLProfile.h"
+#include "../Profile/GLProfile.h"
 #include "../GLTypes.h"
 #include "../Ext/GLExtensions.h"
 #include "../Ext/GLExtensionRegistry.h"
@@ -38,7 +38,7 @@ GLTextureViewPool& GLTextureViewPool::Get()
 void GLTextureViewPool::Clear()
 {
     /* Delete all texture view GL objects and clear container */
-    for (const auto& texView : textureViews_)
+    for (const GLTextureView& texView : textureViews_)
     {
         if (texView.texID != 0)
             glDeleteTextures(1, &(texView.texID));
@@ -49,7 +49,7 @@ void GLTextureViewPool::Clear()
 
 GLuint GLTextureViewPool::CreateTextureView(GLuint sourceTexID, const TextureViewDescriptor& textureViewDesc, bool restoreBoundTexture)
 {
-    #ifdef GL_ARB_texture_view
+    #if LLGL_GLEXT_TEXTURE_VIEW
 
     if (!HasExtension(GLExt::ARB_texture_view))
         return 0;
@@ -63,7 +63,7 @@ GLuint GLTextureViewPool::CreateTextureView(GLuint sourceTexID, const TextureVie
 
     /* Try to find texture view with same parameters */
     std::size_t insertionIndex = 0;
-    auto* sharedTexView = FindInSortedArray<GLTextureView>(
+    GLTextureView* sharedTexView = FindInSortedArray<GLTextureView>(
         textureViews_.data(),
         textureViews_.size(),
         [&texView](const GLTextureView& rhs)
@@ -153,7 +153,7 @@ int GLTextureViewPool::CompareTextureViewSWO(const GLTextureView& lhs, const GLT
     return CompareCompressedTexViewSWO(lhs.view, rhs.view);
 }
 
-#ifdef GL_ARB_texture_view
+#if LLGL_GLEXT_TEXTURE_VIEW
 
 static void InitializeTextureViewSwizzle(GLuint texID, const GLTextureTarget target, const TextureViewDescriptor& textureViewDesc)
 {
@@ -161,13 +161,13 @@ static void InitializeTextureViewSwizzle(GLuint texID, const GLTextureTarget tar
     GLTexture::TexParameterSwizzle(textureViewDesc.type, textureViewDesc.format, textureViewDesc.swizzle);
 }
 
-#endif // /GL_ARB_texture_view
+#endif // /LLGL_GLEXT_TEXTURE_VIEW
 
 static GLuint GenGLTextureView(GLuint sourceTexID, const TextureViewDescriptor& textureViewDesc, bool restoreBoundTexture)
 {
     GLuint texID = 0;
 
-    #ifdef GL_ARB_texture_view
+    #if LLGL_GLEXT_TEXTURE_VIEW
 
     if (HasExtension(GLExt::ARB_texture_view))
     {
@@ -185,7 +185,7 @@ static GLuint GenGLTextureView(GLuint sourceTexID, const TextureViewDescriptor& 
         );
 
         /* Initialize texture swizzle */
-        const auto target = GLStateManager::GetTextureTarget(textureViewDesc.type);
+        const GLTextureTarget target = GLStateManager::GetTextureTarget(textureViewDesc.type);
         if (restoreBoundTexture)
         {
             /* Initialize texture view with swizzle parameters and store/restore bound texture slot */
@@ -202,7 +202,7 @@ static GLuint GenGLTextureView(GLuint sourceTexID, const TextureViewDescriptor& 
         }
     }
 
-    #endif // /GL_ARB_texture_view
+    #endif // /LLGL_GLEXT_TEXTURE_VIEW
 
     return texID;
 }
@@ -238,7 +238,9 @@ static GLTextureTarget UncompressGLTextureTarget(std::uint32_t type)
 
 void GLTextureViewPool::DeleteGLTextureView(GLTextureView& texView)
 {
+    /* Delete GL texture and reset ID to ensure it's cleaned up in FlushReusableTextureViews() */
     GLStateManager::Get().DeleteTexture(texView.texID, UncompressGLTextureTarget(texView.view.type));
+    texView.texID = 0;
 }
 
 void GLTextureViewPool::RetainSharedGLTextureView(GLTextureView& texView, GLuint texID)

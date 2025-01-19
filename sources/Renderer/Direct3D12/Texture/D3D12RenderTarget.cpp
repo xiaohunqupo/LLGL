@@ -12,6 +12,7 @@
 #include "../D3D12Types.h"
 #include "../Command/D3D12CommandContext.h"
 #include "../RenderState/D3D12DescriptorHeap.h"
+#include "../RenderState/D3D12RenderPass.h"
 #include "../../DXCommon/DXTypes.h"
 #include "../../DXCommon/DXCore.h"
 #include "../../CheckedCast.h"
@@ -31,12 +32,16 @@ D3D12RenderTarget::D3D12RenderTarget(D3D12Device& device, const RenderTargetDesc
 {
     ColorFormatVector colorFormats;
     const UINT numColorFormats = GatherAttachmentFormats(device, desc, colorFormats);
+
     CreateDescriptorHeaps(device.GetNative(), numColorFormats);
     CreateAttachments(device.GetNative(), desc, colorFormats);
     defaultRenderPass_.BuildAttachments(numColorFormats, colorFormats.data(), depthStencilFormat_, sampleDesc_);
+
+    if (desc.debugName != nullptr)
+        SetDebugName(desc.debugName);
 }
 
-void D3D12RenderTarget::SetName(const char* name)
+void D3D12RenderTarget::SetDebugName(const char* name)
 {
     D3D12SetObjectNameSubscript(rtvDescHeap_.Get(), name, ".RTV");
     D3D12SetObjectNameSubscript(dsvDescHeap_.Get(), name, ".DSV");
@@ -80,7 +85,7 @@ void D3D12RenderTarget::TransitionToOutputMerger(D3D12CommandContext& commandCon
     if (depthStencil_ != nullptr)
         commandContext.TransitionResource(*depthStencil_, D3D12_RESOURCE_STATE_DEPTH_WRITE);
 
-    commandContext.FlushResourceBarrieres();
+    commandContext.FlushResourceBarriers();
 }
 
 void D3D12RenderTarget::ResolveSubresources(D3D12CommandContext& commandContext)
@@ -100,14 +105,14 @@ void D3D12RenderTarget::ResolveSubresources(D3D12CommandContext& commandContext)
     }
     else
     {
-        for (auto& resource : colorBuffers_)
+        for (D3D12Resource* resource : colorBuffers_)
             commandContext.TransitionResource(*resource, resource->usageState);
     }
 
     if (depthStencil_ != nullptr)
         commandContext.TransitionResource(*depthStencil_, depthStencil_->usageState);
 
-    commandContext.FlushResourceBarrieres();
+    commandContext.FlushResourceBarriers();
 }
 
 D3D12_CPU_DESCRIPTOR_HANDLE D3D12RenderTarget::GetCPUDescriptorHandleForRTV() const
@@ -220,6 +225,11 @@ void D3D12RenderTarget::CreateDescriptorHeaps(ID3D12Device* device, const UINT n
     }
 }
 
+static const D3D12RenderPass* GetD3DRenderPass(const RenderPass* renderPass)
+{
+    return (renderPass != nullptr ? LLGL_CAST(const D3D12RenderPass*, renderPass) : nullptr);
+}
+
 void D3D12RenderTarget::CreateAttachments(
     ID3D12Device*                   device,
     const RenderTargetDescriptor&   desc,
@@ -236,7 +246,11 @@ void D3D12RenderTarget::CreateAttachments(
         }
     }
     if (dsvDescHeap_)
-        CreateDepthStencilAttachment(device, desc.depthStencilAttachment, dsvDescHeap_->GetCPUDescriptorHandleForHeapStart());
+    {
+        auto* renderPassD3D = GetD3DRenderPass(desc.renderPass);
+        const D3D12_DSV_FLAGS dsvFlags = (renderPassD3D != nullptr ? renderPassD3D->GetAttachmentFlagsDSV() : D3D12_DSV_FLAG_NONE);
+        CreateDepthStencilAttachment(device, desc.depthStencilAttachment, dsvDescHeap_->GetCPUDescriptorHandleForHeapStart(), dsvFlags);
+    }
 }
 
 void D3D12RenderTarget::CreateColorAttachment(
@@ -287,7 +301,8 @@ void D3D12RenderTarget::CreateColorAttachment(
 void D3D12RenderTarget::CreateDepthStencilAttachment(
     ID3D12Device*                   device,
     const AttachmentDescriptor&     depthStenciAttachment,
-    D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle)
+    D3D12_CPU_DESCRIPTOR_HANDLE     cpuDescHandle,
+    D3D12_DSV_FLAGS                 dsvFlags)
 {
     /* Create depth-stencil attachment */
     if (Texture* texture = depthStenciAttachment.texture)
@@ -301,17 +316,19 @@ void D3D12RenderTarget::CreateDepthStencilAttachment(
             depthStencilFormat_,
             textureD3D.GetType(),
             depthStenciAttachment.mipLevel,
-            depthStenciAttachment.arrayLayer
+            depthStenciAttachment.arrayLayer,
+            dsvFlags
         );
     }
     else
     {
+        const CD3DX12_CLEAR_VALUE clearValue{ depthStencilFormat_, 1.0f, 0 };
         depthStencil_ = CreateInternalTexture(
             device,
             depthStencilFormat_,
             D3D12_RESOURCE_STATE_DEPTH_WRITE,
             (D3D12_RESOURCE_FLAG_ALLOW_DEPTH_STENCIL | D3D12_RESOURCE_FLAG_DENY_SHADER_RESOURCE),
-            &CD3DX12_CLEAR_VALUE(depthStencilFormat_, 1.0f, 0)
+            &clearValue
         );
         device->CreateDepthStencilView(depthStencil_->Get(), nullptr, cpuDescHandle);
     }
@@ -338,8 +355,9 @@ D3D12Resource* D3D12RenderTarget::CreateInternalTexture(
 
     /* Create render target resource */
     D3D12Resource tex2D;
+    const CD3DX12_HEAP_PROPERTIES heapProperties{ D3D12_HEAP_TYPE_DEFAULT };
     HRESULT hr = device->CreateCommittedResource(
-        &CD3DX12_HEAP_PROPERTIES(D3D12_HEAP_TYPE_DEFAULT),
+        &heapProperties,
         D3D12_HEAP_FLAG_NONE,
         &tex2DDesc,
         initialState,
@@ -426,12 +444,13 @@ void D3D12RenderTarget::CreateDepthStencilView(
     DXGI_FORMAT         format,
     const TextureType   type,
     UINT                mipLevel,
-    UINT                arrayLayer)
+    UINT                arrayLayer,
+    D3D12_DSV_FLAGS     dsvFlags)
 {
     /* Initialize D3D12 RTV descriptor */
     D3D12_DEPTH_STENCIL_VIEW_DESC dsvDesc;
     dsvDesc.Format  = DXTypes::ToDXGIFormatDSV(format);
-    dsvDesc.Flags   = D3D12_DSV_FLAG_NONE;
+    dsvDesc.Flags   = dsvFlags;
 
     switch (type)
     {

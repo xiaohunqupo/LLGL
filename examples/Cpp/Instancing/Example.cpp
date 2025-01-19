@@ -6,7 +6,7 @@
  */
 
 #include <ExampleBase.h>
-#include <stb/stb_image.h>
+#include <ImageReader.h>
 #include <LLGL/Display.h>
 
 
@@ -27,7 +27,8 @@ class Example_Instancing : public ExampleBase
     LLGL::ResourceHeap*         resourceHeap        = nullptr;
 
     // Two vertex buffer, one for per-vertex data, one for per-instance data
-    LLGL::Buffer*               vertexBuffers[2]    = {};
+    LLGL::Buffer*               perVertexDataBuf    = nullptr;
+    LLGL::Buffer*               perInstanceDataBuf  = nullptr;
     LLGL::BufferArray*          vertexBufferArray   = nullptr;
 
     LLGL::Buffer*               constantBuffer      = nullptr;
@@ -42,7 +43,7 @@ class Example_Instancing : public ExampleBase
     struct Settings
     {
         Gs::Matrix4f    vpMatrix;                           // View-projection matrix
-        Gs::Vector4f    viewPos;                            // Camera view position (in world spce)
+        Gs::Vector4f    viewPos;                            // Camera view position (in world space)
         float           fogColor[3] = { 0.3f, 0.3f, 0.3f };
         float           fogDensity  = 0.04f;
         float           animVec[2]  = { 0.0f, 0.0f };       // Animation vector to make the plants wave in the wind
@@ -65,23 +66,18 @@ public:
         const auto caps = renderer->GetRenderingCaps();
 
         // Set debugging names
-        vertexShader->SetName("VertexShader");
-        fragmentShader->SetName("FragmentShader");
-        arrayTexture->SetName("SceneTexture");
-        vertexBuffers[0]->SetName("Vertices");
-        vertexBuffers[1]->SetName("Instances");
-        constantBuffer->SetName("Constants");
-        pipeline[0]->SetName("PSO.Default");
-        pipeline[1]->SetName("PSO.AlphaToCoverage");
-        pipelineLayout->SetName("PipelineLayout");
-        samplers[0]->SetName("LinearSampler");
-        samplers[1]->SetName("ClampedSampler");
-        resourceHeap->SetName("ResourceHeap");
+        arrayTexture->SetDebugName("SceneTexture");
+        pipeline[0]->SetDebugName("PSO.Default");
+        pipeline[1]->SetDebugName("PSO.AlphaToCoverage");
+        pipelineLayout->SetDebugName("PipelineLayout");
+        resourceHeap->SetDebugName("ResourceHeap");
 
         // Show info
-        std::cout << "press LEFT/RIGHT MOUSE BUTTON to rotate the camera around the scene" << std::endl;
-        std::cout << "press R KEY to reload the shader program" << std::endl;
-        std::cout << "press SPACE KEY to switch between pipeline states with and without alpha-to-coverage" << std::endl;
+        LLGL::Log::Printf(
+            "press LEFT/RIGHT MOUSE BUTTON to rotate the camera around the scene\n"
+            "press R KEY to reload the shader program\n"
+            "press SPACE KEY to switch between pipeline states with and without alpha-to-coverage\n"
+        );
     }
 
 private:
@@ -162,14 +158,14 @@ private:
         LLGL::VertexFormat vertexFormatPerVertex;
         vertexFormatPerVertex.attributes =
         {
-            LLGL::VertexAttribute{ "position", LLGL::Format::RGB32Float, /*location:*/ 0, /*offset:*/ 0,               /*stride:*/ sizeof(Vertex), /*slot:*/ 0 },
-            LLGL::VertexAttribute{ "texCoord", LLGL::Format::RG32Float,  /*location:*/ 1, /*offset:*/ sizeof(float)*3, /*stride:*/ sizeof(Vertex), /*slot:*/ 0 },
+            LLGL::VertexAttribute{ "position", LLGL::Format::RGB32Float, /*location:*/ 0, /*offset:*/ offsetof(Vertex, position), /*stride:*/ sizeof(Vertex), /*slot:*/ 0 },
+            LLGL::VertexAttribute{ "texCoord", LLGL::Format::RG32Float,  /*location:*/ 1, /*offset:*/ offsetof(Vertex, texCoord), /*stride:*/ sizeof(Vertex), /*slot:*/ 0 },
         };
 
         LLGL::VertexFormat vertexFormatPerInstance;
         vertexFormatPerInstance.attributes =
         {
-            LLGL::VertexAttribute{ "color",                         LLGL::Format::RGB32Float,  /*location:*/ 2, /*offset:*/  0,                                /*stride:*/ sizeof(Instance), /*slot:*/ 1, /*instanceDivisor:*/ 1 },
+            LLGL::VertexAttribute{ "color",                         LLGL::Format::RGB32Float,  /*location:*/ 2, /*offset:*/  offsetof(Instance, color),        /*stride:*/ sizeof(Instance), /*slot:*/ 1, /*instanceDivisor:*/ 1 },
             LLGL::VertexAttribute{ "arrayLayer",                    LLGL::Format::R32Float,    /*location:*/ 3, /*offset:*/  offsetof(Instance, arrayLayer),   /*stride:*/ sizeof(Instance), /*slot:*/ 1, /*instanceDivisor:*/ 1 },
             LLGL::VertexAttribute{ "wMatrix", /*semanticIndex:*/ 0, LLGL::Format::RGBA32Float, /*location:*/ 4, /*offset:*/  offsetof(Instance, wMatrix),      /*stride:*/ sizeof(Instance), /*slot:*/ 1, /*instanceDivisor:*/ 1 },
             LLGL::VertexAttribute{ "wMatrix", /*semanticIndex:*/ 1, LLGL::Format::RGBA32Float, /*location:*/ 5, /*offset:*/  offsetof(Instance, wMatrix) + 16, /*stride:*/ sizeof(Instance), /*slot:*/ 1, /*instanceDivisor:*/ 1 },
@@ -182,21 +178,27 @@ private:
         grassPlane.arrayLayer = static_cast<float>(numPlantImages + 1);
 
         // Create buffer for per-vertex data
-        LLGL::BufferDescriptor desc;
-
-        desc.size           = sizeof(vertexData);
-        desc.bindFlags      = LLGL::BindFlags::VertexBuffer;
-        desc.vertexAttribs  = vertexFormatPerVertex.attributes;
-
-        vertexBuffers[0] = renderer->CreateBuffer(desc, vertexData);
+        LLGL::BufferDescriptor perVertexDataDesc;
+        {
+            perVertexDataDesc.debugName     = "Vertices";
+            perVertexDataDesc.size          = sizeof(vertexData);
+            perVertexDataDesc.bindFlags     = LLGL::BindFlags::VertexBuffer;
+            perVertexDataDesc.vertexAttribs = vertexFormatPerVertex.attributes;
+        }
+        perVertexDataBuf = renderer->CreateBuffer(perVertexDataDesc, vertexData);
 
         // Create buffer for per-instance data
-        desc.size           = static_cast<std::uint32_t>(sizeof(Instance) * instanceData.size());
-        desc.vertexAttribs  = vertexFormatPerInstance.attributes;
-
-        vertexBuffers[1] = renderer->CreateBuffer(desc, instanceData.data());
+        LLGL::BufferDescriptor perInstanceDataDesc;
+        {
+            perInstanceDataDesc.debugName       = "Instances";
+            perInstanceDataDesc.size            = static_cast<std::uint32_t>(sizeof(Instance) * instanceData.size());
+            perInstanceDataDesc.bindFlags       = LLGL::BindFlags::VertexBuffer;
+            perInstanceDataDesc.vertexAttribs   = vertexFormatPerInstance.attributes;
+        }
+        perInstanceDataBuf = renderer->CreateBuffer(perInstanceDataDesc, instanceData.data());
 
         // Create vertex buffer array
+        LLGL::Buffer* vertexBuffers[2] = { perVertexDataBuf, perInstanceDataBuf };
         vertexBufferArray = renderer->CreateBufferArray(2, vertexBuffers);
 
         // Create constant buffer
@@ -209,14 +211,14 @@ private:
     {
         std::string filename;
 
-        std::vector<unsigned char> arrayImageBuffer;
+        std::vector<char> arrayImageBuffer;
 
         // Load all array images
-        int width = 0, height = 0;
+        std::uint32_t width = 0, height = 0;
 
-        auto numImages = (numPlantImages + 1);
+        std::uint32_t numImages = 0;
 
-        for (std::uint32_t i = 0; i < numImages; ++i)
+        for (std::uint32_t i = 0; i <= numPlantImages; ++i)
         {
             // Setup filename for "Plants_N.png" where N is from 0 to 9
             if (i < numPlantImages)
@@ -224,30 +226,28 @@ private:
             else
                 filename = "Grass.jpg";
 
-            // Load all images from file (using STBI library, see https://github.com/nothings/stb)
-            int w = 0, h = 0, c = 0;
-            unsigned char* imageBuffer = stbi_load(filename.c_str(), &w, &h, &c, 4);
-            if (!imageBuffer)
-                throw std::runtime_error("failed to load texture from file: \"" + filename + "\"");
+            // Load image asset
+            ImageReader reader;
+            if (!reader.LoadFromFile(filename))
+                continue;
 
             // Copy image buffer into array image buffer
-            if ( ( width != 0 && height != 0 ) && ( width != w || height != h ) )
-                throw std::runtime_error("image size mismatch");
+            const LLGL::Extent3D imageExtent = reader.GetTextureDesc().extent;
+            if ( ( width != 0 && height != 0 ) && ( width != imageExtent.width || height != imageExtent.height ) )
+            {
+                LLGL::Log::Errorf("image size mismatch for image \"%s\"\n", filename.c_str());
+                continue;
+            }
 
-            width = w;
-            height = h;
+            width   = imageExtent.width;
+            height  = imageExtent.height;
 
-            auto imageBufferSize = w*h*4;
-            auto imageBufferOffset = arrayImageBuffer.size();
-            arrayImageBuffer.resize(imageBufferOffset + imageBufferSize);
-
-            ::memcpy(arrayImageBuffer.data() + imageBufferOffset, imageBuffer, imageBufferSize);
-
-            // Release temporary image data
-            stbi_image_free(imageBuffer);
+            reader.AppendImageDataTo(arrayImageBuffer);
 
             // Show info
-            std::cout << "loaded texture: " << filename << std::endl;
+            LLGL::Log::Printf("loaded texture: %s\n", filename.c_str());
+
+            ++numImages;
         }
 
         // Create array texture object with 'numImages' layers
@@ -270,15 +270,17 @@ private:
         // Create sampler state object for the grass plane
         LLGL::SamplerDescriptor samplerDesc;
         {
-            samplerDesc.maxAnisotropy = 8;
+            samplerDesc.debugName       = "LinearSampler";
+            samplerDesc.maxAnisotropy   = 8;
         }
         samplers[1] = renderer->CreateSampler(samplerDesc);
 
         // Create sampler state object for the plants
         {
-            samplerDesc.addressModeU = LLGL::SamplerAddressMode::Clamp;
-            samplerDesc.addressModeV = LLGL::SamplerAddressMode::Clamp;
-            samplerDesc.addressModeW = LLGL::SamplerAddressMode::Clamp;
+            samplerDesc.debugName       = "ClampedSampler";
+            samplerDesc.addressModeU    = LLGL::SamplerAddressMode::Clamp;
+            samplerDesc.addressModeV    = LLGL::SamplerAddressMode::Clamp;
+            samplerDesc.addressModeW    = LLGL::SamplerAddressMode::Clamp;
         }
         samplers[0] = renderer->CreateSampler(samplerDesc);
     }
@@ -290,18 +292,16 @@ private:
         fragmentShader  = LoadStandardFragmentShader("PS");
 
         // Create pipeline layout
-        if (IsOpenGL())
-        {
-            pipelineLayout = renderer->CreatePipelineLayout(
-                LLGL::Parse("heap{cbuffer(0):vert:frag, texture(0):frag, sampler(0):frag}")
-            );
-        }
-        else
-        {
-            pipelineLayout = renderer->CreatePipelineLayout(
-                LLGL::Parse("heap{cbuffer(2):vert:frag, texture(3):frag, sampler(4):frag}")
-            );
-        }
+        pipelineLayout = renderer->CreatePipelineLayout(
+            LLGL::Parse(
+                "heap{"
+                "  cbuffer(Settings@2):vert:frag,"
+                "  texture(tex@3):frag,"
+                "  sampler(texSampler@4):frag,"
+                "},"
+                "sampler<tex, texSampler>(tex@3)"
+            )
+        );
 
         // Create resource view heap
         const LLGL::ResourceViewDescriptor resourceViews[] =
@@ -362,7 +362,7 @@ private:
 
     void OnDrawFrame() override
     {
-        // Update scene animationa and user input
+        // Update scene animation and user input
         UpdateAnimation();
 
         static bool alphaToCoverageEnabled = true;
@@ -370,9 +370,9 @@ private:
         {
             alphaToCoverageEnabled = !alphaToCoverageEnabled;
             if (alphaToCoverageEnabled)
-                std::cout << "Alpha-To-Coverage Enabled" << std::endl;
+                LLGL::Log::Printf("Alpha-To-Coverage Enabled\n");
             else
-                std::cout << "Alpha-To-Coverage Disabled" << std::endl;
+                LLGL::Log::Printf("Alpha-To-Coverage Disabled\n");
         }
 
         commands->Begin();

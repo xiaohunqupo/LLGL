@@ -27,19 +27,22 @@ class Win32GLContext final : public GLContext
     public:
 
         Win32GLContext(
-            const GLPixelFormat&                pixelFormat,
-            const RendererConfigurationOpenGL&  profile,
-            Surface&                            surface,
-            Win32GLContext*                     sharedContext
+            const GLPixelFormat&                    pixelFormat,
+            const RendererConfigurationOpenGL&      profile,
+            Surface&                                surface,
+            Win32GLContext*                         sharedContext,
+            const OpenGL::RenderSystemNativeHandle* customNativeHandle
         );
         ~Win32GLContext();
 
         int GetSamples() const override;
 
+        bool GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize) const override;
+
     public:
 
         // Select the pixel format for the specified surface to make it compatible with this GL context.
-        void SelectPixelFormat(Surface& surface);
+        bool SelectPixelFormat(HDC hDC);
 
         // Returns the OpenGL render context handle.
         inline HGLRC GetGLRCHandle() const
@@ -59,7 +62,9 @@ class Win32GLContext final : public GLContext
 
     private:
 
-        void CreateContext(Surface& surface, Win32GLContext* sharedContext = nullptr);
+        void CreateProxyContext(Surface& surface, const OpenGL::RenderSystemNativeHandle& nativeHandle);
+
+        void CreateWGLContext(Surface& surface, Win32GLContext* sharedContext = nullptr);
 
         HGLRC CreateStandardWGLContext(HDC hDC);
         HGLRC CreateExplicitWGLContext(HDC hDC, Win32GLContext* sharedContext = nullptr);
@@ -67,11 +72,11 @@ class Win32GLContext final : public GLContext
         bool SelectMultisampledPixelFormat(HDC hDC);
         void CopyPixelFormat(Win32GLContext& sourceContext);
 
-        HDC UpdateSurfacePixelFormat(Surface& surface);
+        void ErrorMultisampleContextFailed();
 
     private:
 
-        static const UINT           maxPixelFormatsMS                   = 8;
+        static constexpr UINT       maxPixelFormatsMS                   = 8;
 
         RendererConfigurationOpenGL profile_;
         GLPixelFormat               formatDesc_;
@@ -82,6 +87,8 @@ class Win32GLContext final : public GLContext
 
         HDC                         hDC_                                = nullptr;
         HGLRC                       hGLRC_                              = nullptr;
+
+        const bool                  isProxyGLRC_                        = false; // true if a custom native handle was provided
 
 };
 

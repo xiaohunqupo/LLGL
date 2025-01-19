@@ -9,12 +9,20 @@
 #include "D3D12CommandQueue.h"
 #include "../D3D12Device.h"
 #include "../D3D12Resource.h"
+#include "../Buffer/D3D12Buffer.h"
+#include "../Texture/D3D12Texture.h"
 #include "../RenderState/D3D12Fence.h"
+#include "../../CheckedCast.h"
 #include "../../DXCommon/DXCore.h"
 #include "../../../Core/Assertion.h"
+#include "../../../Core/CoreUtils.h"
 #include <LLGL/Utils/ForRange.h>
 #include <algorithm>
 #include <limits.h>
+
+
+// Validates resource descriptors for each transition barrier. Potentially slow, use with caution!
+#define LLGL_DEBUG_D3D12_RESOURCE_BARRIERS 0
 
 
 namespace LLGL
@@ -26,6 +34,10 @@ static constexpr D3D12_DESCRIPTOR_HEAP_TYPE g_descriptorHeapTypes[] =
     D3D12_DESCRIPTOR_HEAP_TYPE_CBV_SRV_UAV,
     D3D12_DESCRIPTOR_HEAP_TYPE_SAMPLER,
 };
+
+constexpr UINT D3D12CommandContext::maxNumAllocators;
+constexpr UINT D3D12CommandContext::maxNumResourceBarrieres;
+constexpr UINT D3D12CommandContext::maxNumDescriptorHeaps;
 
 D3D12CommandContext::D3D12CommandContext()
 {
@@ -42,8 +54,11 @@ void D3D12CommandContext::Create(
     D3D12_COMMAND_LIST_TYPE commandListType,
     UINT                    numAllocators,
     UINT64                  initialStagingChunkSize,
-    bool                    initialClose)
+    bool                    initialClose,
+    bool                    cacheResourceStates)
 {
+    doCacheResourceStates_ = cacheResourceStates;
+
     /* Store reference to device and command queue */
     device_ = device.GetNative();
 
@@ -51,7 +66,7 @@ void D3D12CommandContext::Create(
     allocatorFence_.Create(device.GetNative());
 
     /* Determine number of command allocators */
-    numAllocators_ = std::max(1u, std::min(numAllocators, D3D12CommandContext::maxNumAllocators));
+    numAllocators_ = Clamp<UINT>(numAllocators, 1u, D3D12CommandContext::maxNumAllocators);
 
     /* Create command allocators and descriptor heap pools */
     constexpr UINT64 minStagingChunkSize = 256;
@@ -80,34 +95,33 @@ void D3D12CommandContext::Create(
 void D3D12CommandContext::Close()
 {
     /* Flush pending resource barriers */
-    FlushResourceBarrieres();
+    FlushResourceBarriers();
 
     /* Close native command list */
     HRESULT hr = commandList_->Close();
     DXThrowIfFailed(hr, "failed to close D3D12 command list");
-}
 
-void D3D12CommandContext::Execute(D3D12CommandQueue& commandQueue)
-{
-    /* Submit command list to queue and signal current allocator fence */
-    commandQueue.ExecuteCommandList(GetCommandList());
-}
-
-void D3D12CommandContext::ExecuteAndSignal(D3D12CommandQueue& commandQueue)
-{
-    Execute(commandQueue);
-    Signal(commandQueue);
+    /* Reset resource states if this context had to cache them */
+    if (doCacheResourceStates_)
+    {
+        for (const D3D12ResourceTransitionExt& resourceState : cachedResourceStates_)
+            resourceState.resource->currentState = resourceState.initialState;
+    }
 }
 
 void D3D12CommandContext::Signal(D3D12CommandQueue& commandQueue)
 {
-    commandQueue.SignalFence(allocatorFence_.Get(), allocatorFenceValues_[currentAllocatorIndex_]);
+    const UINT64 currentFenceValue = allocatorFence_.GetCompletedValue();
+    const UINT64 nextFenceValue = allocatorFenceValues_[currentAllocatorIndex_];
+    if (currentFenceValue < nextFenceValue)
+        commandQueue.SignalFence(allocatorFence_.Get(), nextFenceValue);
+    allocatorFenceValueDirty_[currentAllocatorIndex_] = false;
 }
 
-void D3D12CommandContext::Reset()
+void D3D12CommandContext::Reset(D3D12CommandQueue& commandQueue)
 {
     /* Switch to next command allocator */
-    NextCommandAllocator();
+    NextCommandAllocator(commandQueue);
 
     /* Reset graphics command list */
     HRESULT hr = commandList_->Reset(GetCommandAllocator(), nullptr);
@@ -117,70 +131,171 @@ void D3D12CommandContext::Reset()
     ClearCache();
 }
 
-void D3D12CommandContext::FinishAndSync(D3D12CommandQueue& commandQueue)
+void D3D12CommandContext::ExecuteBundle(D3D12CommandContext& otherContext)
 {
-    /* Close command list and execute, then reset command allocator for next encoding */
-    Close();
-    ExecuteAndSignal(commandQueue);
-    Reset();
+    /*
+    TODO:
+    D3D12 bundles can bind descriptor heaps but they must match the primary command buffer's descriptor heaps.
+    As a workaround, always bind the descriptor heaps that were cached in the secondary command buffer,
+    since those that are shader visible will be the same throughout the command encoding (see D3D12StagingDescriptorHeapPool).
+    Some kind of descriptor heap sharing/pooling should be implemented next.
+    */
+    SetDescriptorHeapsOfOtherContext(otherContext);
 
-    /* Sync CPU/GPU */
-    commandQueue.WaitIdle();
+    /* Encode command to execute command list of other context as bundle */
+    commandList_->ExecuteBundle(otherContext.GetCommandList());
 }
 
-void D3D12CommandContext::TransitionResource(ID3D12Resource* resource, D3D12_RESOURCE_STATES newState, D3D12_RESOURCE_STATES oldState, bool flushImmediate)
+void D3D12CommandContext::ExecuteResourceTransitions(const D3D12CommandContext& otherContext)
 {
-    D3D12_RESOURCE_BARRIER& barrier = NextResourceBarrier();
-
-    /* Initialize resource barrier for resource transition */
-    barrier.Type                    = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
-    barrier.Flags                   = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.Transition.pResource    = resource;
-    barrier.Transition.Subresource  = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-    barrier.Transition.StateBefore  = oldState;
-    barrier.Transition.StateAfter   = newState;
-
-    /* Flush resource barrieres if required */
-    if (flushImmediate)
-        FlushResourceBarrieres();
-}
-
-void D3D12CommandContext::TransitionResource(D3D12Resource& resource, D3D12_RESOURCE_STATES newState, bool flushImmediate)
-{
-    if (resource.currentState != newState)
+    for (const D3D12ResourceTransitionExt& resourceState : otherContext.cachedResourceStates_)
     {
+        /* Transition resource into the state that's expected at the beginning of the command list */
+        TransitionResource(*resourceState.resource, resourceState.beginState);
+
+        /* Store state the resource will be at the end of the command list now, since this won't effect the command list execution */
+        resourceState.resource->currentState = resourceState.endState;
+    }
+}
+
+void D3D12CommandContext::TransitionBarrier(ID3D12Resource* resource, D3D12_RESOURCE_STATES newState, D3D12_RESOURCE_STATES oldState, UINT subresource, bool flushImmediate)
+{
+    #if LLGL_DEBUG_D3D12_RESOURCE_BARRIERS
+    if (newState == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+    {
+        D3D12_RESOURCE_DESC descD3D = resource->GetDesc();
+        LLGL_ASSERT((descD3D.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0);
+    }
+    #endif // /LLGL_DEBUG_D3D12_RESOURCE_BARRIERS
+
+    /* Check if there's already a transition barrier for this subresource in the queue */
+    if (D3D12_RESOURCE_BARRIER* cachedBarrier = FindSubresourceTransitionBarrier(resource, subresource))
+    {
+        if (cachedBarrier->Transition.StateBefore == newState)
+        {
+            /* Drop this barrier if before and after state are the same. Otherwise, ID3D12CommandList will fail! */
+            --numResourceBarriers_;
+        }
+        else
+        {
+            /* Update after state */
+            cachedBarrier->Transition.StateAfter = newState;
+        }
+    }
+    else
+    {
+        /* Initialize resource barrier for resource transition */
         D3D12_RESOURCE_BARRIER& barrier = NextResourceBarrier();
 
-        /* Initialize resource barrier for resource transition */
         barrier.Type                    = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
         barrier.Flags                   = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-        barrier.Transition.pResource    = resource.Get();
-        barrier.Transition.Subresource  = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
-        barrier.Transition.StateBefore  = resource.currentState;
+        barrier.Transition.pResource    = resource;
+        barrier.Transition.Subresource  = subresource;
+        barrier.Transition.StateBefore  = oldState;
         barrier.Transition.StateAfter   = newState;
-
-        /* Store new transition state */
-        resource.currentState = newState;
     }
 
     /* Flush resource barrieres if required */
     if (flushImmediate)
-        FlushResourceBarrieres();
+        FlushResourceBarriers();
 }
 
-void D3D12CommandContext::InsertUAVBarrier(D3D12Resource& resource, bool flushImmediate)
+void D3D12CommandContext::TransitionBarrier(ID3D12Resource* resource, D3D12_RESOURCE_STATES newState, D3D12_RESOURCE_STATES oldState, bool flushImmediate)
+{
+    TransitionBarrier(resource, newState, oldState, D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES, flushImmediate);
+}
+
+void D3D12CommandContext::TransitionResource(D3D12Resource& resource, D3D12_RESOURCE_STATES newState, bool flushImmediate)
+{
+    if (doCacheResourceStates_)
+    {
+        /* Cache resource state at beginning and end of command list */
+        bool isBeginState = false;
+        CacheResourceState(&resource, newState, isBeginState);
+
+        if (isBeginState)
+        {
+            /* Store new resource state */
+            resource.currentState = newState;
+        }
+        else
+        {
+            /*
+            Only transition resource now if it was not the initial cache entry.
+            Otherwise, the command list expects the resource to be in this state at the beginning.
+            */
+            TransitionResourceInternal(resource, newState);
+        }
+    }
+    else
+    {
+        /* Transition resource to new state if it has changed */
+        TransitionResourceInternal(resource, newState);
+    }
+
+    /* Flush resource barrieres if required */
+    if (flushImmediate)
+        FlushResourceBarriers();
+}
+
+//private
+void D3D12CommandContext::TransitionResourceInternal(D3D12Resource& resource, D3D12_RESOURCE_STATES newState)
+{
+    if (resource.currentState != newState)
+    {
+        #if LLGL_DEBUG_D3D12_RESOURCE_BARRIERS
+        if (newState == D3D12_RESOURCE_STATE_UNORDERED_ACCESS)
+        {
+            D3D12_RESOURCE_DESC descD3D = resource.native->GetDesc();
+            LLGL_ASSERT((descD3D.Flags & D3D12_RESOURCE_FLAG_ALLOW_UNORDERED_ACCESS) != 0);
+        }
+        #endif // /LLGL_DEBUG_D3D12_RESOURCE_BARRIERS
+
+        /* Check if there's already a transition barrier for this subresource in the queue */
+        if (D3D12_RESOURCE_BARRIER* cachedBarrier = FindSubresourceTransitionBarrier(resource.Get(), D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES))
+        {
+            if (cachedBarrier->Transition.StateBefore == newState)
+            {
+                /* Drop this barrier if before and after state are the same. Otherwise, ID3D12CommandList will fail! */
+                --numResourceBarriers_;
+            }
+            else
+            {
+                /* Update after state */
+                cachedBarrier->Transition.StateAfter = newState;
+            }
+        }
+        else
+        {
+            D3D12_RESOURCE_BARRIER& barrier = NextResourceBarrier();
+
+            /* Initialize resource barrier for resource transition */
+            barrier.Type                    = D3D12_RESOURCE_BARRIER_TYPE_TRANSITION;
+            barrier.Flags                   = D3D12_RESOURCE_BARRIER_FLAG_NONE;
+            barrier.Transition.pResource    = resource.Get();
+            barrier.Transition.Subresource  = D3D12_RESOURCE_BARRIER_ALL_SUBRESOURCES;
+            barrier.Transition.StateBefore  = resource.currentState;
+            barrier.Transition.StateAfter   = newState;
+        }
+
+        /* Store new resource state */
+        resource.currentState = newState;
+    }
+}
+
+void D3D12CommandContext::UAVBarrier(ID3D12Resource* resource, bool flushImmediate)
 {
     D3D12_RESOURCE_BARRIER& barrier = NextResourceBarrier();
 
     barrier.Type            = D3D12_RESOURCE_BARRIER_TYPE_UAV;
     barrier.Flags           = D3D12_RESOURCE_BARRIER_FLAG_NONE;
-    barrier.UAV.pResource   = resource.native.Get();
+    barrier.UAV.pResource   = resource;
 
     if (flushImmediate)
-        FlushResourceBarrieres();
+        FlushResourceBarriers();
 }
 
-void D3D12CommandContext::FlushResourceBarrieres()
+void D3D12CommandContext::FlushResourceBarriers()
 {
     if (numResourceBarriers_ > 0)
     {
@@ -214,7 +329,7 @@ void D3D12CommandContext::ResolveSubresource(
 
     /* Transition both resources */
     TransitionResource(dstResource, dstResourceOldState);
-    TransitionResource(srcResource, srcResourceOldState, true);
+    TransitionResource(srcResource, srcResourceOldState);
 }
 
 void D3D12CommandContext::CopyTextureRegion(
@@ -251,7 +366,7 @@ void D3D12CommandContext::CopyTextureRegion(
 
     /* Transition both resources */
     TransitionResource(dstResource, dstResourceOldState);
-    TransitionResource(srcResource, srcResourceOldState, true);
+    TransitionResource(srcResource, srcResourceOldState);
 }
 
 void D3D12CommandContext::UpdateSubresource(
@@ -342,26 +457,36 @@ void D3D12CommandContext::SetDescriptorHeapsOfOtherContext(const D3D12CommandCon
         SetDescriptorHeaps(other.stateCache_.numDescriptorHeaps, other.stateCache_.descriptorHeaps);
 }
 
-void D3D12CommandContext::PrepareStagingDescriptorHeaps(
-    const D3D12DescriptorHeapSetLayout& layout,
-    const D3D12RootParameterIndices&    indices)
+void D3D12CommandContext::SetStagingDescriptorHeaps(const D3D12DescriptorHeapSetLayout& layout, const D3D12RootParameterIndices& indices)
 {
     stagingDescriptorSetLayout_ = layout;
     stagingDescriptorIndices_   = indices;
 
-    /* Bind shader-visible descriptor heaps */
-    ID3D12DescriptorHeap* const stagingDescriptorHeaps[2] =
+    if (stagingDescriptorSetLayout_.numHeapResourceViews > 0 ||
+        stagingDescriptorSetLayout_.numHeapSamplers      > 0 ||
+        stagingDescriptorSetLayout_.numResourceViews     > 0 ||
+        stagingDescriptorSetLayout_.numSamplers          > 0)
     {
-        stagingDescriptorPools_[currentAllocatorIndex_][0].GetDescriptorHeap(),
-        stagingDescriptorPools_[currentAllocatorIndex_][1].GetDescriptorHeap()
-    };
-    SetDescriptorHeaps(2, stagingDescriptorHeaps);
+        /* Bind shader-visible descriptor heaps */
+        ID3D12DescriptorHeap* const stagingDescriptorHeaps[2] =
+        {
+            stagingDescriptorPools_[currentAllocatorIndex_][0].GetDescriptorHeap(),
+            stagingDescriptorPools_[currentAllocatorIndex_][1].GetDescriptorHeap()
+        };
+        SetDescriptorHeaps(2, stagingDescriptorHeaps);
 
-    /* Reset descriptor cache for dynamic descriptors */
-    descriptorCaches_[currentAllocatorIndex_].Reset(
-        stagingDescriptorSetLayout_.numResourceViews,
-        stagingDescriptorSetLayout_.numSamplers
-    );
+        /* Reset descriptor cache for dynamic descriptors */
+        descriptorCaches_[currentAllocatorIndex_].Reset(
+            stagingDescriptorSetLayout_.numResourceViews,
+            stagingDescriptorSetLayout_.numSamplers
+        );
+    }
+}
+
+void D3D12CommandContext::GetStagingDescriptorHeaps(D3D12DescriptorHeapSetLayout& outLayout, D3D12RootParameterIndices& outIndices)
+{
+    outLayout   = stagingDescriptorSetLayout_;
+    outIndices  = stagingDescriptorIndices_;
 }
 
 void D3D12CommandContext::SetGraphicsConstant(UINT parameterIndex, D3D12Constant value, UINT offset)
@@ -456,6 +581,7 @@ void D3D12CommandContext::DrawInstanced(
     UINT startVertexLocation,
     UINT startInstanceLocation)
 {
+    FlushResourceBarriers();
     FlushDeferredPipelineState();
     FlushGraphicsStagingDescriptorTables();
     commandList_->DrawInstanced(vertexCountPerInstance, instanceCount, startVertexLocation, startInstanceLocation);
@@ -468,6 +594,7 @@ void D3D12CommandContext::DrawIndexedInstanced(
     INT     baseVertexLocation,
     UINT    startInstanceLocation)
 {
+    FlushResourceBarriers();
     FlushDeferredPipelineState();
     FlushGraphicsStagingDescriptorTables();
     commandList_->DrawIndexedInstanced(indexCountPerInstance, instanceCount, startIndexLocation, baseVertexLocation, startInstanceLocation);
@@ -481,6 +608,7 @@ void D3D12CommandContext::DrawIndirect(
     ID3D12Resource*         countBuffer,
     UINT64                  countBufferOffset)
 {
+    FlushResourceBarriers();
     FlushDeferredPipelineState();
     FlushGraphicsStagingDescriptorTables();
     commandList_->ExecuteIndirect(commandSignature, maxCommandCount, argumentBuffer, argumentBufferOffset, countBuffer, countBufferOffset);
@@ -491,6 +619,7 @@ void D3D12CommandContext::Dispatch(
     UINT threadGroupCountY,
     UINT threadGroupCountZ)
 {
+    FlushResourceBarriers();
     FlushComputeStagingDescriptorTables();
     commandList_->Dispatch(threadGroupCountX, threadGroupCountY, threadGroupCountZ);
 }
@@ -503,6 +632,7 @@ void D3D12CommandContext::DispatchIndirect(
     ID3D12Resource*         countBuffer,
     UINT64                  countBufferOffset)
 {
+    FlushResourceBarriers();
     FlushComputeStagingDescriptorTables();
     commandList_->ExecuteIndirect(commandSignature, maxCommandCount, argumentBuffer, argumentBufferOffset, countBuffer, countBufferOffset);
 }
@@ -523,24 +653,64 @@ void D3D12CommandContext::ClearCache()
     /* Clear state bits */
     stateCache_.stateBits.isDeferredPSO         = 0;
     stateCache_.stateBits.is16BitIndexFormat    = 0;
+
+    /* Clear cached resource states */
+    cachedResourceStates_.clear();
 }
 
 D3D12_RESOURCE_BARRIER& D3D12CommandContext::NextResourceBarrier()
 {
     if (numResourceBarriers_ == D3D12CommandContext::maxNumResourceBarrieres)
-        FlushResourceBarrieres();
+        FlushResourceBarriers();
     return resourceBarriers_[numResourceBarriers_++];
 }
 
-void D3D12CommandContext::NextCommandAllocator()
+D3D12_RESOURCE_BARRIER* D3D12CommandContext::FindSubresourceTransitionBarrier(ID3D12Resource* resource, UINT subresource)
+{
+    /* Check if last barrier refers to the same subresource */
+    if (numResourceBarriers_ > 0)
+    {
+        D3D12_RESOURCE_BARRIER& barrier = resourceBarriers_[numResourceBarriers_ - 1];
+        if (barrier.Type                   == D3D12_RESOURCE_BARRIER_TYPE_TRANSITION &&
+            barrier.Transition.pResource   == resource                               &&
+            barrier.Transition.Subresource == subresource)
+        {
+            return &barrier;
+        }
+    }
+    return nullptr;
+}
+
+void D3D12CommandContext::CacheResourceState(D3D12Resource* resource, D3D12_RESOURCE_STATES state, bool& outIsBeginState)
+{
+    if (resource->cacheIndex < cachedResourceStates_.size() && cachedResourceStates_[resource->cacheIndex].resource == resource)
+    {
+        /* Update previous cache entry */
+        cachedResourceStates_[resource->cacheIndex].endState = state;
+    }
+    else
+    {
+        /* Append new cache entry and initialize both begin and end states */
+        resource->cacheIndex = static_cast<UINT>(cachedResourceStates_.size());
+        cachedResourceStates_.push_back({ resource, resource->currentState, state, state });
+        outIsBeginState = true;
+    }
+}
+
+void D3D12CommandContext::NextCommandAllocator(D3D12CommandQueue& commandQueue)
 {
     /* Get next command allocator */
     const UINT64 currentFenceValue = allocatorFenceValues_[currentAllocatorIndex_];
     currentAllocatorIndex_ = ((currentAllocatorIndex_ + 1) % numAllocators_);
 
+    /* If fence was not signaled since last encoding, we must signal it now and wait for a full queue flush */
+    if (allocatorFenceValueDirty_[currentAllocatorIndex_])
+        Signal(commandQueue);
+
     /* Wait until fence value of next allocator has been signaled */
     allocatorFence_.WaitForHigherSignal(allocatorFenceValues_[currentAllocatorIndex_]);
     allocatorFenceValues_[currentAllocatorIndex_] = currentFenceValue + 1;
+    allocatorFenceValueDirty_[currentAllocatorIndex_] = true;
 
     /* Reclaim memory allocated by command allocator using <ID3D12CommandAllocator::Reset> */
     HRESULT hr = GetCommandAllocator()->Reset();

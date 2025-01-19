@@ -10,15 +10,22 @@
 #include "../GLObjectUtils.h"
 #include "../Ext/GLExtensions.h"
 #include "../RenderState/GLStateManager.h"
+#include "../../../Core/Exception.h"
+#include "../../../Core/CoreUtils.h"
+#include <LLGL/Backend/OpenGL/NativeHandle.h>
 
 
 namespace LLGL
 {
 
 
-GLSampler::GLSampler()
+#if LLGL_GLEXT_SAMPLER_OBJECTS
+
+GLSampler::GLSampler(const char* debugName)
 {
     glGenSamplers(1, &id_);
+    if (debugName != nullptr)
+        SetDebugName(debugName);
 }
 
 GLSampler::~GLSampler()
@@ -27,7 +34,18 @@ GLSampler::~GLSampler()
     GLStateManager::Get().NotifySamplerRelease(id_);
 }
 
-void GLSampler::SetName(const char* name)
+bool GLSampler::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    if (auto* nativeHandleGL = GetTypedNativeHandle<OpenGL::ResourceNativeHandle>(nativeHandle, nativeHandleSize))
+    {
+        nativeHandleGL->type    = OpenGL::ResourceNativeType::Sampler;
+        nativeHandleGL->id      = GetID();
+        return true;
+    }
+    return false;
+}
+
+void GLSampler::SetDebugName(const char* name)
 {
     GLSetObjectLabel(GL_SAMPLER, GetID(), name);
 }
@@ -71,10 +89,39 @@ void GLSampler::SamplerParameters(const SamplerDescriptor& desc)
         glSamplerParameteri(id_, GL_TEXTURE_COMPARE_MODE, GL_NONE);
 
     /* Set border color */
-    #ifdef LLGL_SAMPLER_BORDER_COLOR
+    #if LLGL_SAMPLER_BORDER_COLOR
     glSamplerParameterfv(id_, GL_TEXTURE_BORDER_COLOR, desc.borderColor);
     #endif
 }
+
+#else // LLGL_GLEXT_SAMPLER_OBJECTS
+
+GLSampler::GLSampler(const char* debugName)
+{
+    LLGL_TRAP_FEATURE_NOT_SUPPORTED("GL_ARB_sampler_objects");
+}
+
+GLSampler::~GLSampler()
+{
+    // dummy
+}
+
+bool GLSampler::GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize)
+{
+    return false; // dummy
+}
+
+void GLSampler::SetDebugName(const char* name)
+{
+    // dummy
+}
+
+void GLSampler::SamplerParameters(const SamplerDescriptor& desc)
+{
+    // dummy
+}
+
+#endif // /LLGL_GLEXT_SAMPLER_OBJECTS
 
 
 } // /namespace LLGL

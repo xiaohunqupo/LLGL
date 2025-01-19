@@ -66,9 +66,10 @@ set INPUT_FN=^
     %CINCLUDE%\TypeNames.h ^
     %CINCLUDE%\Window.h
 
-REM Generate wrapper for C99, C#
+REM Generate wrapper for C99, C#, Go
 call :Generate .\LLGLWrapper.h -c99
 call :Generate .\LLGLWrapper.cs -csharp -fn
+call :Generate .\LLGLWrapper.go -golang
 
 exit /B 0
 
@@ -85,11 +86,11 @@ if "%FUNCTIONS%"=="" (
 )
 
 REM Run Python script to parse LLGL headers and write result into output file
-python3 %ARGS% > %OUTPUT%
+python %ARGS% > %OUTPUT%
 
 REM Repeat command if an error occurred
 if %ERRORLEVEL% NEQ 0 (
-    python3 %ARGS%
+    python %ARGS%
 )
 
 exit /B %ERRORLEVEL%

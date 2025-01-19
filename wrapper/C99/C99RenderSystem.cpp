@@ -234,6 +234,7 @@ static void ConvertBufferDesc(BufferDescriptor& dst, SmallVector<VertexAttribute
     for_range(i, src.numVertexAttribs)
         ConvertVertexAttrib(dstVertexAttribs[i], src.vertexAttribs[i]);
 
+    dst.debugName       = src.debugName;
     dst.size            = src.size;
     dst.stride          = src.stride;
     dst.format          = (Format)src.format;
@@ -482,8 +483,18 @@ static void ConvertUniformDesc(UniformDescriptor& dst, const LLGLUniformDescript
     dst.arraySize  = src.arraySize;
 }
 
+static void ConvertCombinedTextureSamplerDesc(CombinedTextureSamplerDescriptor& dst, const LLGLCombinedTextureSamplerDescriptor& src)
+{
+    dst.name        = src.name;
+    dst.textureName = src.textureName;
+    dst.samplerName = src.samplerName;
+    dst.slot        = { src.slot.index, src.slot.set };
+}
+
 static void ConvertPipelineLayoutDesc(PipelineLayoutDescriptor& dst, const LLGLPipelineLayoutDescriptor& src)
 {
+    dst.debugName = src.debugName;
+
     dst.heapBindings.resize(src.numHeapBindings);
     for_range(i, src.numHeapBindings)
         ConvertBindingDesc(dst.heapBindings[i], src.heapBindings[i]);
@@ -499,6 +510,12 @@ static void ConvertPipelineLayoutDesc(PipelineLayoutDescriptor& dst, const LLGLP
     dst.uniforms.resize(src.numUniforms);
     for_range(i, src.numUniforms)
         ConvertUniformDesc(dst.uniforms[i], src.uniforms[i]);
+
+    dst.combinedTextureSamplers.resize(src.numCombinedTextureSamplers);
+    for_range(i, src.numCombinedTextureSamplers)
+        ConvertCombinedTextureSamplerDesc(dst.combinedTextureSamplers[i], src.combinedTextureSamplers[i]);
+
+    dst.barrierFlags = src.barrierFlags;
 }
 
 LLGL_C_EXPORT LLGLPipelineLayout llglCreatePipelineLayout(const LLGLPipelineLayoutDescriptor* pipelineLayoutDesc)
@@ -528,6 +545,7 @@ LLGL_C_EXPORT void llglReleasePipelineCache(LLGLPipelineCache pipelineCache)
 
 static void ConvertGraphicsPipelineDesc(GraphicsPipelineDescriptor& dst, const LLGLGraphicsPipelineDescriptor& src)
 {
+    dst.debugName               = src.debugName;
     dst.pipelineLayout          = LLGL_PTR(PipelineLayout, src.pipelineLayout);
     dst.renderPass              = LLGL_PTR(RenderPass, src.renderPass);
     dst.vertexShader            = LLGL_PTR(Shader, src.vertexShader);
@@ -567,6 +585,7 @@ LLGL_C_EXPORT LLGLPipelineState llglCreateGraphicsPipelineStateExt(const LLGLGra
 
 static void ConvertComputePipelineDesc(ComputePipelineDescriptor& dst, const LLGLComputePipelineDescriptor& src)
 {
+    dst.debugName       = src.debugName;
     dst.pipelineLayout  = LLGL_PTR(PipelineLayout, src.pipelineLayout);
     dst.computeShader   = LLGL_PTR(Shader, src.computeShader);
 }

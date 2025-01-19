@@ -10,6 +10,7 @@
 
 
 #include "../GLContext.h"
+#include "AndroidSharedEGLSurface.h"
 #include "../../OpenGL.h"
 #include <EGL/egl.h>
 
@@ -25,33 +26,45 @@ class AndroidGLContext : public GLContext
     public:
 
         AndroidGLContext(
-            const GLPixelFormat&                pixelFormat,
-            const RendererConfigurationOpenGL&  profile,
-            Surface&                            surface,
-            AndroidGLContext*                   sharedContext
+            const GLPixelFormat&                    pixelFormat,
+            const RendererConfigurationOpenGL&      profile,
+            Surface&                                surface,
+            AndroidGLContext*                       sharedContext,
+            const OpenGL::RenderSystemNativeHandle* customNativeHandle
         );
         ~AndroidGLContext();
 
         int GetSamples() const override;
 
+        bool GetNativeHandle(void* nativeHandle, std::size_t nativeHandleSize) const override;
+
     public:
 
         // Returns the native EGL display.
-        inline ::EGLDisplay GetEGLDisplay() const
+        inline EGLDisplay GetEGLDisplay() const
         {
             return display_;
         }
 
         // Returns the native EGL context.
-        inline ::EGLContext GetEGLContext() const
+        inline EGLContext GetEGLContext() const
         {
             return context_;
         }
 
         // Returns the native EGL configuration.
-        inline ::EGLConfig GetEGLConfig() const
+        inline EGLConfig GetEGLConfig() const
         {
             return config_;
+        }
+
+        /*
+        Returns the shared EGLSurface object. This is primarily associated with AndroidGLSwapChainContext,
+        but we need a surface for the initial EGLContext when it's made current.
+        */
+        inline const AndroidSharedEGLSurfacePtr& GetSharedEGLSurface() const
+        {
+            return surface_;
         }
 
     private:
@@ -67,12 +80,18 @@ class AndroidGLContext : public GLContext
         );
         void DeleteContext();
 
+        void LoadExternalContext(EGLContext context);
+
+        EGLContext CreateEGLContextForESVersion(EGLint major, EGLint minor, EGLContext sharedEGLContext = EGL_NO_CONTEXT);
+
     private:
 
-        ::EGLDisplay    display_    = nullptr;
-        ::EGLContext    context_    = nullptr;
-        ::EGLConfig     config_     = nullptr;
-        int             samples_    = 1;
+        EGLDisplay                  display_            = nullptr;
+        EGLContext                  context_            = nullptr;
+        EGLConfig                   config_             = nullptr;
+        AndroidSharedEGLSurfacePtr  surface_;
+        int                         samples_            = 1;
+        bool                        hasExternalContext_ = false;
 
 };
 

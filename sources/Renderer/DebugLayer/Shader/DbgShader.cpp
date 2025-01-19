@@ -14,15 +14,15 @@ namespace LLGL
 
 
 DbgShader::DbgShader(Shader& instance, const ShaderDescriptor& desc) :
-    Shader    { desc.type },
-    instance  { instance  },
-    desc      { desc      }
+    Shader    { desc.type            },
+    instance  { instance             },
+    desc      { desc                 },
+    label     { LLGL_DBG_LABEL(desc) }
 {
-    if (GetType() == ShaderType::Vertex)
-        QueryInstanceAndVertexIDs();
+    CacheShaderReflection();
 }
 
-void DbgShader::SetName(const char* name)
+void DbgShader::SetDebugName(const char* name)
 {
     DbgSetObjectName(*this, name);
 }
@@ -49,7 +49,7 @@ const char* DbgShader::GetInstanceID() const
 
 bool DbgShader::IsCompiled() const
 {
-    if (auto report = instance.GetReport())
+    if (const Report* report = instance.GetReport())
         return !report->HasErrors();
     else
         return true;
@@ -60,29 +60,45 @@ bool DbgShader::IsCompiled() const
  * ======= Private: =======
  */
 
-void DbgShader::QueryInstanceAndVertexIDs()
+void DbgShader::CacheShaderReflection()
 {
     ShaderReflection reflect;
-    #if 0 //TODO
     if (instance.Reflect(reflect))
     {
-        for (const auto& attr : reflect.vertex.inputAttribs)
+        switch (GetType())
         {
-            if (vertexID_.empty())
-            {
-                if (attr.systemValue == SystemValue::VertexID)
-                    vertexID_ = attr.name;
-            }
-            if (instanceID_.empty())
-            {
-                if (attr.systemValue == SystemValue::InstanceID)
-                    instanceID_ = attr.name;
-            }
-            if (!vertexID_.empty() && !instanceID_.empty())
+            case ShaderType::Vertex:
+            case ShaderType::Fragment:
+                CacheShaderReflectionResults(reflect);
+                break;
+
+            default:
                 break;
         }
     }
-    #endif
+    else
+        hasReflectionFailed_ = true;
+}
+
+void DbgShader::CacheShaderReflectionResults(const ShaderReflection& reflect)
+{
+    for (const VertexAttribute& attr : reflect.vertex.inputAttribs)
+    {
+        if (vertexID_.empty())
+        {
+            if (attr.systemValue == SystemValue::VertexID)
+                vertexID_ = attr.name.c_str();
+        }
+        if (instanceID_.empty())
+        {
+            if (attr.systemValue == SystemValue::InstanceID)
+                instanceID_ = attr.name.c_str();
+        }
+        if (!vertexID_.empty() && !instanceID_.empty())
+            break;
+    }
+
+    hasAnyOutputAttribs_ = !(reflect.vertex.outputAttribs.empty() && reflect.fragment.outputAttribs.empty());
 }
 
 

@@ -83,7 +83,7 @@ struct AttachmentDescriptor
 
 /**
 \brief Render target descriptor structure.
-\remarks Here is a small example of a render target descriptor with a color attachmnet
+\remarks Here is a small example of a render target descriptor with a color attachment
 and an anonymous depth attachment (i.e. without a texture reference, which is only allowed for depth/stencil attachments):
 \code
 LLGL::RenderTargetDescriptor myRenderTargetDesc;
@@ -102,6 +102,13 @@ auto myRenderTarget = myRenderer->CreateRenderTarget(myRenderTargetDesc);
 */
 struct RenderTargetDescriptor
 {
+    /**
+    \brief Optional name for debugging purposes. By default null.
+    \remarks The final name of the native hardware resource is implementation defined.
+    \see RenderSystemChild::SetName
+    */
+    const char*             debugName   = nullptr;
+
     /**
     \brief Optional render pass object that will be used with the render target. By default null.
     \remarks If this is null, a default render pass is created for the render target.
